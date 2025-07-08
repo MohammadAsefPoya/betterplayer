@@ -5,6 +5,9 @@ import 'better_player_subtitles_source_type.dart';
 ///Representation of subtitles source. Used to define subtitles in Better
 /// Player.
 class BetterPlayerSubtitlesSource {
+  /// ISO 639-2 subtitle language code (e.g. 'en', 'es').
+  final String? language;
+
   ///Source type
   final BetterPlayerSubtitlesSourceType? type;
 
@@ -38,6 +41,7 @@ class BetterPlayerSubtitlesSource {
 
   BetterPlayerSubtitlesSource({
     this.type,
+    this.language,
     this.name = "Default subtitles",
     this.urls,
     this.content,
@@ -53,6 +57,7 @@ class BetterPlayerSubtitlesSource {
     BetterPlayerSubtitlesSourceType? type,
     String name = "Default subtitles",
     String? url,
+    String? language,
     String? content,
     bool? selectedByDefault,
     Map<String, String>? headers,
@@ -62,6 +67,7 @@ class BetterPlayerSubtitlesSource {
           type: type,
           name: name,
           urls: [url],
+          language: language,
           content: content,
           selectedByDefault: selectedByDefault,
           headers: headers,

@@ -323,6 +323,7 @@ class BetterPlayerController {
               type: BetterPlayerSubtitlesSourceType.network,
               name: asmsSubtitle.name,
               urls: asmsSubtitle.realUrls,
+              language: asmsSubtitle.language,
               asmsIsSegmented: asmsSubtitle.isSegmented,
               asmsSegmentsTime: asmsSubtitle.segmentsTime,
               asmsSegments: asmsSubtitle.segments,
