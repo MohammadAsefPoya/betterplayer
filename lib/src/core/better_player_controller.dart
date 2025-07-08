@@ -1177,6 +1177,20 @@ class BetterPlayerController {
       case VideoEventType.bufferingEnd:
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.bufferingEnd));
         break;
+      case VideoEventType.videoSizeChanged:
+        final size = event.size;
+        if (size != null) {
+          _postEvent(
+            BetterPlayerEvent(
+              BetterPlayerEventType.videoSizeChanged,
+              parameters: <String, dynamic>{
+                "width": size.width.toInt(),
+                "height": size.height.toInt(),
+              },
+            ),
+          );
+        }
+        break;
       default:
 
         ///TODO: Handle when needed
@@ -1273,7 +1287,7 @@ class BetterPlayerController {
   ///cache started for given [betterPlayerDataSource] then it will be ignored.
   Future<void> stopPreCache(
       BetterPlayerDataSource betterPlayerDataSource) async {
-    return VideoPlayerController?.stopPreCache(betterPlayerDataSource.url,
+    return VideoPlayerController.stopPreCache(betterPlayerDataSource.url,
         betterPlayerDataSource.cacheConfiguration?.key);
   }
 

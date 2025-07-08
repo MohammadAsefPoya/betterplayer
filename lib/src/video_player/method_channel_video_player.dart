@@ -429,6 +429,15 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             key: key,
           );
 
+        case 'videoSizeChanged':
+          final num w = map['width'] as num;
+          final num h = map['height'] as num;
+          return VideoEvent(
+            eventType: VideoEventType.videoSizeChanged,
+            key: key,
+            size: Size(w.toDouble(), h.toDouble()),
+          );
+
         default:
           return VideoEvent(
             eventType: VideoEventType.unknown,

@@ -25,6 +25,8 @@ import android.support.v4.media.session.MediaSessionCompat
 import com.google.android.exoplayer2.drm.DrmSessionManager
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
+import com.google.android.exoplayer2.analytics.AnalyticsListener
+import com.google.android.exoplayer2.video.VideoSize
 import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
 import com.google.android.exoplayer2.drm.DefaultDrmSessionManager
@@ -112,6 +114,20 @@ internal class BetterPlayer(
         workManager = WorkManager.getInstance(context)
         workerObserverMap = HashMap()
         setupVideoPlayer(eventChannel, textureEntry, result)
+        exoPlayer?.addAnalyticsListener(object : AnalyticsListener {
+        override fun onVideoSizeChanged(
+            eventTime: AnalyticsListener.EventTime,
+            videoSize: VideoSize
+        ) {
+            // build the same shape of event maps your Dart side already expects
+            val event: MutableMap<String, Any> = HashMap()
+            event["event"] = "videoSizeChanged"   // you can name this whatever you like
+            event["width"]   = videoSize.width
+            event["height"]  = videoSize.height
+            // send it over the already-wired EventChannel
+            eventSink.success(event)
+          }
+        })
     }
 
     fun setDataSource(
