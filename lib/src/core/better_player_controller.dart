@@ -210,6 +210,24 @@ class BetterPlayerController {
   ///Currently displayed [BetterPlayerSubtitle].
   BetterPlayerSubtitle? renderedSubtitle;
 
+  /// Default subtitle delay.
+  Duration _subtitleDelay = Duration(seconds: 2);
+
+  /// Current subtitle delay (can be negative or positive).
+  Duration get subtitleDelay => _subtitleDelay;
+
+  /// Set subtitle delay and notify listeners.
+  /// Positive = subtitles appear later, negative = earlier.
+  void setSubtitleDelay(Duration delay) {
+    _subtitleDelay = delay;
+    _postEvent(
+      BetterPlayerEvent(
+        BetterPlayerEventType.changedSubtitles,
+        parameters: {"delay": delay},
+      ),
+    );
+  }
+
   BetterPlayerController(
     this.betterPlayerConfiguration, {
     this.betterPlayerPlaylistConfiguration,
