@@ -3,10 +3,15 @@
 class BetterPlayerBufferingConfiguration {
   ///Constants values are from the offical exoplayer documentation
   ///https://exoplayer.dev/doc/reference/constant-values.html#com.google.android.exoplayer2.DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS
-  static const defaultMinBufferMs = 25000;
-  static const defaultMaxBufferMs = 50000;
-  static const defaultBufferForPlaybackMs = 3000;
-  static const defaultBufferForPlaybackAfterRebufferMs = 6000;
+  // static const defaultMinBufferMs = 25000;
+  // static const defaultMaxBufferMs = 50000;
+  // static const defaultBufferForPlaybackMs = 3000;
+  // static const defaultBufferForPlaybackAfterRebufferMs = 6000;
+
+  static const defaultMinBufferMs = 10000;
+  static const defaultMaxBufferMs = 30000;
+  static const defaultBufferForPlaybackMs = 1500;
+  static const defaultBufferForPlaybackAfterRebufferMs = 2500;
 
   /// The default minimum duration of media that the player will attempt to
   /// ensure is buffered at all times, in milliseconds.
