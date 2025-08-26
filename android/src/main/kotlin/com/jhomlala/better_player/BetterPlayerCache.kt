@@ -102,8 +102,8 @@ object BetterPlayerCache {
         try {
             for (key in cache.keys) {
                 if (key.startsWith(prefix)) {
-                    // IMPORTANT: use longs (0L) for ExoPlayer API
-                    sum += cache.getCachedBytes(key, 0L, C.LENGTH_UNSET)
+                    // IMPORTANT: use longs (0L) and convert LENGTH_UNSET -> Long
+                    sum += cache.getCachedBytes(key, 0L, C.LENGTH_UNSET.toLong())
                 }
             }
         } catch (e: Exception) {
@@ -115,8 +115,8 @@ object BetterPlayerCache {
     private fun sendCacheUpdate(cacheKey: String, eventSink: EventChannel.EventSink) {
         val cache = instance ?: return
         try {
-            // Use longs (0L) for ExoPlayer API
-            val cachedBytes: Long = cache.getCachedBytes(cacheKey, 0L, C.LENGTH_UNSET)
+            // Use longs (0L) and convert LENGTH_UNSET -> Long
+            val cachedBytes: Long = cache.getCachedBytes(cacheKey, 0L, C.LENGTH_UNSET.toLong())
 
             // ExoPlayer 2.17: derive total content length from ContentMetadata
             val totalBytes: Long = ContentMetadata.getContentLength(cache.getContentMetadata(cacheKey)) // -1 if unknown
