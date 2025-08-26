@@ -13,12 +13,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import java.util.HashMap
 import com.jhomlala.better_player.DataSourceUtils.getUserAgent
 import com.jhomlala.better_player.DataSourceUtils.isHTTP
 import com.jhomlala.better_player.DataSourceUtils.getDataSourceFactory
 import io.flutter.plugin.common.EventChannel
-import io.flutter.view.TextureRegistry
 import io.flutter.view.TextureRegistry.SurfaceTextureEntry
 import io.flutter.plugin.common.MethodChannel
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
@@ -28,6 +26,7 @@ import com.google.android.exoplayer2.drm.DrmSessionManager
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection
+import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor
 import com.google.android.exoplayer2.analytics.AnalyticsListener
 import com.google.android.exoplayer2.video.VideoSize
 import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
@@ -61,9 +60,7 @@ import androidx.work.Data
 import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
-import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
 import com.google.android.exoplayer2.upstream.DataSource
@@ -117,26 +114,11 @@ internal class BetterPlayer(
 
         loadControl = loadBuilder.build()
 
-        // Custom BandwidthMeter for conservative estimation
-        val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
-            .setResetBelowLowWatermark(true) // Quick reset on drops
-            .build()
-
-        // Adaptive Factory with tuning for faster transitions
-        val adaptiveFactory = AdaptiveTrackSelection.Factory(
-            2000, // minDurationForQualityIncreaseMs
-            2000, // minDurationToRetainAfterDiscardMs
-            2000, // minDurationToRetainAfterDiscardMs (duplicate param in constructor; adjust as needed)
-            0.6f // bandwidthFraction - conservative
+        // Track selector with AdaptiveTrackSelection (needed for ABR switching)
+        val trackSelector = DefaultTrackSelector(
+            context,
+            AdaptiveTrackSelection.Factory()
         )
-
-        // Track selector with AdaptiveTrackSelection
-        val trackSelector = DefaultTrackSelector(context, adaptiveFactory)
-
-        // Set custom BandwidthMeter on TrackSelector parameters
-        trackSelector.parameters = trackSelector.parameters.buildUpon()
-            .setBandwidthMeter(bandwidthMeter)
-            .build()
 
         // Build ExoPlayer with custom loadControl + trackSelector
         exoPlayer = ExoPlayer.Builder(context)
@@ -165,6 +147,7 @@ internal class BetterPlayer(
             }
         })
     }
+
 
     fun setDataSource(
         context: Context,
