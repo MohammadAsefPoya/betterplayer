@@ -6,9 +6,9 @@ import com.google.android.exoplayer2.C
 import com.google.android.exoplayer2.database.ExoDatabaseProvider
 import com.google.android.exoplayer2.upstream.cache.Cache
 import com.google.android.exoplayer2.upstream.cache.CacheSpan
+import com.google.android.exoplayer2.upstream.cache.ContentMetadata
 import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor
 import com.google.android.exoplayer2.upstream.cache.SimpleCache
-import com.google.android.exoplayer2.upstream.cache.CacheUtil
 import io.flutter.plugin.common.EventChannel
 import java.io.File
 import java.lang.Exception
@@ -40,10 +40,8 @@ object BetterPlayerCache {
     fun releaseCache() {
         try {
             removeAllCacheListeners()
-            if (instance != null) {
-                instance!!.release()
-                instance = null
-            }
+            instance?.release()
+            instance = null
         } catch (exception: Exception) {
             Log.e("BetterPlayerCache", exception.toString())
         }
@@ -102,10 +100,9 @@ object BetterPlayerCache {
         val cache = instance ?: return 0L
         var sum = 0L
         try {
-            // getKeys() is exposed as "keys" property in Kotlin
             for (key in cache.keys) {
                 if (key.startsWith(prefix)) {
-                    // IMPORTANT: use 0L (long), not 0 (int)
+                    // IMPORTANT: use longs (0L) for ExoPlayer API
                     sum += cache.getCachedBytes(key, 0L, C.LENGTH_UNSET)
                 }
             }
@@ -118,14 +115,11 @@ object BetterPlayerCache {
     private fun sendCacheUpdate(cacheKey: String, eventSink: EventChannel.EventSink) {
         val cache = instance ?: return
         try {
-            // IMPORTANT: use 0L (long), not 0 (int)
+            // Use longs (0L) for ExoPlayer API
             val cachedBytes: Long = cache.getCachedBytes(cacheKey, 0L, C.LENGTH_UNSET)
 
-            // ExoPlayer 2.17 does not expose getContentLength(key).
-            // Read it from ContentMetadata via CacheUtil:
-            val contentMetadata = cache.getContentMetadata(cacheKey)
-            val totalBytes: Long = CacheUtil.getContentLength(contentMetadata) // -1 if unknown
-
+            // ExoPlayer 2.17: derive total content length from ContentMetadata
+            val totalBytes: Long = ContentMetadata.getContentLength(cache.getContentMetadata(cacheKey)) // -1 if unknown
             val percent: Long = if (totalBytes > 0) (cachedBytes * 100L / totalBytes) else -1L
 
             val event: MutableMap<String, Any> = HashMap()

@@ -26,7 +26,6 @@ import com.google.android.exoplayer2.drm.DrmSessionManager
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection
-import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor
 import com.google.android.exoplayer2.analytics.AnalyticsListener
 import com.google.android.exoplayer2.video.VideoSize
 import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
@@ -36,7 +35,6 @@ import com.google.android.exoplayer2.drm.FrameworkMediaDrm
 import com.google.android.exoplayer2.drm.UnsupportedDrmException
 import com.google.android.exoplayer2.drm.DummyExoMediaDrm
 import com.google.android.exoplayer2.drm.LocalMediaDrmCallback
-import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
 import com.google.android.exoplayer2.source.MediaSource
 import com.google.android.exoplayer2.source.ClippingMediaSource
 import com.google.android.exoplayer2.ui.PlayerNotificationManager.MediaDescriptionAdapter
@@ -61,7 +59,6 @@ import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
 import com.google.android.exoplayer2.upstream.DataSource
 import com.google.android.exoplayer2.upstream.DefaultDataSource
@@ -210,9 +207,9 @@ internal class BetterPlayer(
                                 val mediaDrm = FrameworkMediaDrm.newInstance(uuid!!)
                                 // Force L3.
                                 mediaDrm.setPropertyString("securityLevel", "L3")
-                                return@setUuidAndExoMediaDrmProvider mediaDrm
+                                mediaDrm
                             } catch (e: UnsupportedDrmException) {
-                                return@setUuidAndExoMediaDrmProvider DummyExoMediaDrm()
+                                DummyExoMediaDrm()
                             }
                         }
                         .setMultiSession(false)
@@ -541,12 +538,6 @@ internal class BetterPlayer(
 
     private fun getDuration(): Long = exoPlayer?.duration ?: 0L
 
-    /**
-     * Create media session which will be used in notifications, pip mode.
-     *
-     * @param context                - android context
-     * @return - configured MediaSession instance
-     */
     @SuppressLint("InlinedApi")
     fun setupMediaSession(context: Context?): MediaSessionCompat? {
         mediaSession?.release()
@@ -572,7 +563,6 @@ internal class BetterPlayer(
             return mediaSession
         }
         return null
-
     }
 
     fun onPictureInPictureStatusChanged(inPip: Boolean) {
@@ -582,9 +572,7 @@ internal class BetterPlayer(
     }
 
     fun disposeMediaSession() {
-        if (mediaSession != null) {
-            mediaSession?.release()
-        }
+        mediaSession?.release()
         mediaSession = null
     }
 
@@ -881,11 +869,10 @@ internal class BetterPlayer(
         private const val DEFAULT_NOTIFICATION_CHANNEL = "BETTER_PLAYER_NOTIFICATION"
         private const val NOTIFICATION_ID = 20772077
 
-        //Clear cache without accessing BetterPlayerCache.
         fun clearCache(context: Context?, result: MethodChannel.Result) {
             try {
-                context?.let { context ->
-                    val file = File(context.cacheDir, "betterPlayerCache")
+                context?.let { ctx ->
+                    val file = File(ctx.cacheDir, "betterPlayerCache")
                     deleteDirectory(file)
                 }
                 result.success(null)
@@ -909,7 +896,6 @@ internal class BetterPlayer(
             }
         }
 
-        //Start pre cache of video. Invoke work manager job and start caching in background.
         fun preCache(
             context: Context?, dataSource: String?, preCacheSize: Long,
             maxCacheSize: Long, maxCacheFileSize: Long, headers: Map<String, String?>,
@@ -938,8 +924,6 @@ internal class BetterPlayer(
             result.success(null)
         }
 
-        //Stop pre cache of video with given url. If there's no work manager job for given url, then
-        //it will be ignored.
         fun stopPreCache(context: Context?, url: String?, result: MethodChannel.Result) {
             if (url != null && context != null) {
                 WorkManager.getInstance(context).cancelAllWorkByTag(url)
