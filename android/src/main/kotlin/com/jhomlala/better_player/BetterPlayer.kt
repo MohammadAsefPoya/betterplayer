@@ -61,11 +61,11 @@ import androidx.work.Data
 import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
+import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
-import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
 import com.google.android.exoplayer2.upstream.DataSource
 import com.google.android.exoplayer2.upstream.DefaultDataSource
 import com.google.android.exoplayer2.util.Util
@@ -122,14 +122,21 @@ internal class BetterPlayer(
             .setResetBelowLowWatermark(true) // Quick reset on drops
             .build()
 
-        // Track selector with AdaptiveTrackSelection (needed for ABR switching)
-        val trackSelector = DefaultTrackSelector(
-            context,
-            AdaptiveTrackSelection.Factory(bandwidthMeter)
-                .setMinDurationForQualityIncreaseMs(2000) // Faster up-switches
-                .setMinDurationToRetainAfterDiscardMs(2000) // Discard old buffer quicker for downgrades
-                .setBandwidthFraction(0.6f) // Conservative estimation
+        // Adaptive Factory with tuning for faster transitions
+        val adaptiveFactory = AdaptiveTrackSelection.Factory(
+            2000, // minDurationForQualityIncreaseMs
+            2000, // minDurationToRetainAfterDiscardMs
+            2000, // minDurationToRetainAfterDiscardMs (duplicate param in constructor; adjust as needed)
+            0.6f // bandwidthFraction - conservative
         )
+
+        // Track selector with AdaptiveTrackSelection
+        val trackSelector = DefaultTrackSelector(context, adaptiveFactory)
+
+        // Set custom BandwidthMeter on TrackSelector parameters
+        trackSelector.parameters = trackSelector.parameters.buildUpon()
+            .setBandwidthMeter(bandwidthMeter)
+            .build()
 
         // Build ExoPlayer with custom loadControl + trackSelector
         exoPlayer = ExoPlayer.Builder(context)
