@@ -27,4 +27,5 @@ enum BetterPlayerEventType {
   bufferingEnd,
   changedPlaylistItem,
   videoSizeChanged,
+  cacheUpdate,
 }

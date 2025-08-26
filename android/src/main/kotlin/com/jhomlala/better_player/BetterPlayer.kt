@@ -419,6 +419,7 @@ internal class BetterPlayer(
                     event["totalBytes"] = -1 // unknown for HLS/DASH; percent not reliable
                     event["percentCached"] = -1
                     event["source"] = "diskCacheScan"
+                    Log.d("BetterPlayer", "cacheUpdate(diskCacheScan) cachedBytes=${cachedBytes}")
                     eventSink.success(event)
                 } catch (_: Exception) {
                     // ignore

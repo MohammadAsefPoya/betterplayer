@@ -128,6 +128,7 @@ object BetterPlayerCache {
             event["totalBytes"] = totalBytes
             event["percentCached"] = percent
             event["source"] = "cacheKeyListener"
+            Log.d("BetterPlayerCache", "cacheUpdate(cacheKeyListener) key=$cacheKey cached=$cachedBytes total=$totalBytes")
             eventSink.success(event)
         } catch (e: Exception) {
             Log.e("BetterPlayerCache", "Cache listener error: ${e.message}")
