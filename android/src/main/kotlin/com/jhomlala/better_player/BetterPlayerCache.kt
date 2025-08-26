@@ -8,6 +8,7 @@ import com.google.android.exoplayer2.upstream.cache.Cache
 import com.google.android.exoplayer2.upstream.cache.CacheSpan
 import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor
 import com.google.android.exoplayer2.upstream.cache.SimpleCache
+import com.google.android.exoplayer2.upstream.cache.CacheUtil
 import io.flutter.plugin.common.EventChannel
 import java.io.File
 import java.lang.Exception
@@ -50,7 +51,7 @@ object BetterPlayerCache {
 
     /**
      * Attach a cache listener for a single cache key (best for progressive content where the key is a single file).
-     * Emits {"event":"cacheUpdate","cachedBytes":X,"totalBytes":Y,"percentCached":Z}
+     * Emits {"event":"cacheUpdate","cachedBytes":X,"totalBytes":Y,"percentCached":Z,"source":"cacheKeyListener"}
      */
     fun addCacheListener(cacheKey: String, eventSink: EventChannel.EventSink) {
         val cache = instance ?: return
@@ -95,15 +96,17 @@ object BetterPlayerCache {
     /**
      * Get total cached bytes for all entries whose cache key starts with the given prefix.
      * Useful for HLS/DASH where each segment is cached under its own absolute segment URL.
+     * Emits only the sum of cached bytes; total length is typically unknown for HLS live windows.
      */
     fun getCachedBytesForPrefix(prefix: String): Long {
         val cache = instance ?: return 0L
         var sum = 0L
         try {
-            // Cache.getKeys() returns all keys currently present.
+            // getKeys() is exposed as "keys" property in Kotlin
             for (key in cache.keys) {
                 if (key.startsWith(prefix)) {
-                    sum += cache.getCachedBytes(key, 0, C.LENGTH_UNSET)
+                    // IMPORTANT: use 0L (long), not 0 (int)
+                    sum += cache.getCachedBytes(key, 0L, C.LENGTH_UNSET)
                 }
             }
         } catch (e: Exception) {
@@ -115,9 +118,15 @@ object BetterPlayerCache {
     private fun sendCacheUpdate(cacheKey: String, eventSink: EventChannel.EventSink) {
         val cache = instance ?: return
         try {
-            val cachedBytes = cache.getCachedBytes(cacheKey, 0, C.LENGTH_UNSET)
-            val totalBytes = cache.getContentLength(cacheKey) // -1 if unknown
-            val percent = if (totalBytes > 0) (cachedBytes * 100 / totalBytes) else -1
+            // IMPORTANT: use 0L (long), not 0 (int)
+            val cachedBytes: Long = cache.getCachedBytes(cacheKey, 0L, C.LENGTH_UNSET)
+
+            // ExoPlayer 2.17 does not expose getContentLength(key).
+            // Read it from ContentMetadata via CacheUtil:
+            val contentMetadata = cache.getContentMetadata(cacheKey)
+            val totalBytes: Long = CacheUtil.getContentLength(contentMetadata) // -1 if unknown
+
+            val percent: Long = if (totalBytes > 0) (cachedBytes * 100L / totalBytes) else -1L
 
             val event: MutableMap<String, Any> = HashMap()
             event["event"] = "cacheUpdate"

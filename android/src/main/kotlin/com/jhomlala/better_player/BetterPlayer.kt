@@ -262,7 +262,6 @@ internal class BetterPlayer(
         // --- Continuous disk-buffer progress wiring ---
         if (useCache) {
             // 1) For progressive content: attach a key listener if you provided a cacheKey.
-            //    (HLS/DASH splits per segment; key listeners are less useful there.)
             if (!cacheKey.isNullOrEmpty()) {
                 BetterPlayerCache.addCacheListener(cacheKey, eventSink)
                 currentCacheKey = cacheKey
