@@ -13,10 +13,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import java.util.HashMap
 import com.jhomlala.better_player.DataSourceUtils.getUserAgent
 import com.jhomlala.better_player.DataSourceUtils.isHTTP
 import com.jhomlala.better_player.DataSourceUtils.getDataSourceFactory
 import io.flutter.plugin.common.EventChannel
+import io.flutter.view.TextureRegistry
 import io.flutter.view.TextureRegistry.SurfaceTextureEntry
 import io.flutter.plugin.common.MethodChannel
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
@@ -25,6 +27,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import com.google.android.exoplayer2.drm.DrmSessionManager
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
+import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection
 import com.google.android.exoplayer2.analytics.AnalyticsListener
 import com.google.android.exoplayer2.video.VideoSize
 import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
@@ -59,8 +62,10 @@ import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
+import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
+import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
 import com.google.android.exoplayer2.upstream.DataSource
 import com.google.android.exoplayer2.upstream.DefaultDataSource
 import com.google.android.exoplayer2.util.Util
@@ -99,34 +104,58 @@ internal class BetterPlayer(
     private var lastSendBufferedPosition = 0L
 
     init {
+        // Build LoadControl with Dart-side buffer values
         val loadBuilder = DefaultLoadControl.Builder()
-        loadBuilder.setBufferDurationsMs(
-            this.customDefaultLoadControl.minBufferMs,
-            this.customDefaultLoadControl.maxBufferMs,
-            this.customDefaultLoadControl.bufferForPlaybackMs,
-            this.customDefaultLoadControl.bufferForPlaybackAfterRebufferMs
-        )
+            .setBufferDurationsMs(
+                this.customDefaultLoadControl.minBufferMs,
+                this.customDefaultLoadControl.maxBufferMs,
+                this.customDefaultLoadControl.bufferForPlaybackMs,
+                this.customDefaultLoadControl.bufferForPlaybackAfterRebufferMs
+            )
+            // ✅ allow mixed-quality segments (web-style ABR)
+            .setPrioritizeTimeOverSizeThresholds(false)
+
         loadControl = loadBuilder.build()
+
+        // Custom BandwidthMeter for conservative estimation
+        val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+            .setResetBelowLowWatermark(true) // Quick reset on drops
+            .build()
+
+        // Track selector with AdaptiveTrackSelection (needed for ABR switching)
+        val trackSelector = DefaultTrackSelector(
+            context,
+            AdaptiveTrackSelection.Factory(bandwidthMeter)
+                .setMinDurationForQualityIncreaseMs(2000) // Faster up-switches
+                .setMinDurationToRetainAfterDiscardMs(2000) // Discard old buffer quicker for downgrades
+                .setBandwidthFraction(0.6f) // Conservative estimation
+        )
+
+        // Build ExoPlayer with custom loadControl + trackSelector
         exoPlayer = ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .build()
+
+        // Setup worker manager for downloads
         workManager = WorkManager.getInstance(context)
         workerObserverMap = HashMap()
+
+        // Setup Flutter texture + event channel connection
         setupVideoPlayer(eventChannel, textureEntry, result)
+
+        // Example analytics listener for video size change
         exoPlayer?.addAnalyticsListener(object : AnalyticsListener {
-        override fun onVideoSizeChanged(
-            eventTime: AnalyticsListener.EventTime,
-            videoSize: VideoSize
-        ) {
-            // build the same shape of event maps your Dart side already expects
-            val event: MutableMap<String, Any> = HashMap()
-            event["event"] = "videoSizeChanged"   // you can name this whatever you like
-            event["width"]   = videoSize.width
-            event["height"]  = videoSize.height
-            // send it over the already-wired EventChannel
-            eventSink.success(event)
-          }
+            override fun onVideoSizeChanged(
+                eventTime: AnalyticsListener.EventTime,
+                videoSize: VideoSize
+            ) {
+                val event: MutableMap<String, Any> = HashMap()
+                event["event"] = "videoSizeChanged"
+                event["width"] = videoSize.width
+                event["height"] = videoSize.height
+                eventSink.success(event)
+            }
         })
     }
 
