@@ -438,6 +438,22 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             size: Size(w.toDouble(), h.toDouble()),
           );
 
+        case 'cacheUpdate':
+          // Native (Android) sends: cachedBytes (long), totalBytes (long or -1), percentCached (long or -1), source (String)
+          final int cached = (map['cachedBytes'] as num?)?.toInt() ?? 0;
+          final int total = (map['totalBytes'] as num?)?.toInt() ?? -1;
+          final int percent = (map['percentCached'] as num?)?.toInt() ?? -1;
+          final String? source = map['source'] as String?;
+
+          return VideoEvent(
+            eventType: VideoEventType.cacheUpdate,
+            key: key,
+            cachedBytes: cached,
+            totalBytes: total,
+            percentCached: percent,
+            cacheSource: source,
+          );
+
         default:
           return VideoEvent(
             eventType: VideoEventType.unknown,

@@ -1,18 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+// Copyright 2017 The Chromium Authors. All rights
+// reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // Dart imports:
 import 'dart:async';
 import 'dart:io';
+
+// Package imports:
 import 'package:better_player/src/configuration/better_player_buffering_configuration.dart';
 import 'package:better_player/src/video_player/video_player_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 final VideoPlayerPlatform _videoPlayerPlatform = VideoPlayerPlatform.instance
-// This will clear all open videos on the platform when a full restart is
-// performed.
+  // This will clear all open videos on the platform when a full restart is
+  // performed.
   ..init();
 
 /// The duration, current position, buffering state, error state and settings
@@ -33,6 +36,12 @@ class VideoPlayerValue {
     this.speed = 1.0,
     this.errorDescription,
     this.isPip = false,
+
+    // NEW: disk-cache snapshot fields with safe defaults.
+    this.cachedBytes = 0,
+    this.totalBytes = -1,
+    this.percentCached = -1,
+    this.cacheSource,
   });
 
   /// Returns an instance with a `null` [Duration].
@@ -56,7 +65,7 @@ class VideoPlayerValue {
   /// Is null when is not available.
   final DateTime? absolutePosition;
 
-  /// The currently buffered ranges.
+  /// The currently buffered ranges (RAM buffer).
   final List<DurationRange> buffered;
 
   /// True if the video is playing. False if it's paused.
@@ -84,8 +93,14 @@ class VideoPlayerValue {
   /// Is null when [initialized] is false.
   final Size? size;
 
-  ///Is in Picture in Picture Mode
+  /// Is in Picture in Picture Mode
   final bool isPip;
+
+  /// NEW: latest disk-cache snapshot (updated by `cacheUpdate` events).
+  final int cachedBytes; // total cached bytes so far
+  final int totalBytes; // -1 when unknown (HLS/DASH)
+  final int percentCached; // 0..100 or -1
+  final String? cacheSource; // "cacheKeyListener" | "diskCacheScan"
 
   /// Indicates whether or not the video has been loaded and is ready to play.
   bool get initialized => duration != null;
@@ -122,6 +137,12 @@ class VideoPlayerValue {
     String? errorDescription,
     double? speed,
     bool? isPip,
+
+    // NEW: cache snapshot overrides
+    int? cachedBytes,
+    int? totalBytes,
+    int? percentCached,
+    String? cacheSource,
   }) {
     return VideoPlayerValue(
       duration: duration ?? this.duration,
@@ -136,6 +157,12 @@ class VideoPlayerValue {
       speed: speed ?? this.speed,
       errorDescription: errorDescription ?? this.errorDescription,
       isPip: isPip ?? this.isPip,
+
+      // NEW:
+      cachedBytes: cachedBytes ?? this.cachedBytes,
+      totalBytes: totalBytes ?? this.totalBytes,
+      percentCached: percentCached ?? this.percentCached,
+      cacheSource: cacheSource ?? this.cacheSource,
     );
   }
 
@@ -152,6 +179,9 @@ class VideoPlayerValue {
         'isLooping: $isLooping, '
         'isBuffering: $isBuffering, '
         'volume: $volume, '
+        'speed: $speed, '
+        'cachedBytes: $cachedBytes, totalBytes: $totalBytes, '
+        'percentCached: $percentCached, cacheSource: $cacheSource, '
         'errorDescription: $errorDescription)';
   }
 }
@@ -254,6 +284,16 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           break;
         case VideoEventType.videoSizeChanged:
           value = value.copyWith(size: event.size);
+        // (fallthrough in your original file)
+        case VideoEventType.cacheUpdate:
+          // NEW: keep latest disk-cache snapshot in the controller value.
+          value = value.copyWith(
+            cachedBytes: event.cachedBytes,
+            totalBytes: event.totalBytes,
+            percentCached: event.percentCached,
+            cacheSource: event.cacheSource,
+          );
+          break;
         case VideoEventType.unknown:
           break;
       }
@@ -309,11 +349,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     );
   }
 
-  /// Set data source for playing a video from obtained from
-  /// the network.
+  /// Set data source for playing a video obtained from the network.
   ///
-  /// The URI for the video is given by the [dataSource] argument and must not be
-  /// null.
   /// **Android only**: The [formatHint] option allows the caller to override
   /// the video format detection code.
   /// ClearKey DRM only supported on Android.
@@ -368,27 +405,30 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   ///
   /// This will load the file from the file-URI given by:
   /// `'file://${file.path}'`.
-  Future<void> setFileDataSource(File file,
-      {bool? showNotification,
-      String? title,
-      String? author,
-      String? imageUrl,
-      String? notificationChannelName,
-      Duration? overriddenDuration,
-      String? activityName,
-      String? clearKey}) {
+  Future<void> setFileDataSource(
+    File file, {
+    bool? showNotification,
+    String? title,
+    String? author,
+    String? imageUrl,
+    String? notificationChannelName,
+    Duration? overriddenDuration,
+    String? activityName,
+    String? clearKey,
+  }) {
     return _setDataSource(
       DataSource(
-          sourceType: DataSourceType.file,
-          uri: 'file://${file.path}',
-          showNotification: showNotification,
-          title: title,
-          author: author,
-          imageUrl: imageUrl,
-          notificationChannelName: notificationChannelName,
-          overriddenDuration: overriddenDuration,
-          activityName: activityName,
-          clearKey: clearKey),
+        sourceType: DataSourceType.file,
+        uri: 'file://${file.path}',
+        showNotification: showNotification,
+        title: title,
+        author: author,
+        imageUrl: imageUrl,
+        notificationChannelName: notificationChannelName,
+        overriddenDuration: overriddenDuration,
+        activityName: activityName,
+        clearKey: clearKey,
+      ),
     );
   }
 
@@ -717,10 +757,13 @@ class VideoProgressColors {
   /// [backgroundColor] defaults to gray at 50% opacity. This is the background
   /// color behind both [playedColor] and [bufferedColor] to denote the total
   /// size of the video compared to either of those values.
+  ///
+  /// NEW: [diskCachedColor] represents on-disk cached progress (VOD).
   VideoProgressColors({
     this.playedColor = const Color.fromRGBO(255, 0, 0, 0.7),
     this.bufferedColor = const Color.fromRGBO(50, 50, 200, 0.2),
     this.backgroundColor = const Color.fromRGBO(200, 200, 200, 0.5),
+    this.diskCachedColor = const Color.fromRGBO(0, 150, 0, 0.25),
   });
 
   /// [playedColor] defaults to red at 70% opacity. This fills up a portion of
@@ -737,6 +780,9 @@ class VideoProgressColors {
   /// color behind both [playedColor] and [bufferedColor] to denote the total
   /// size of the video compared to either of those values.
   final Color backgroundColor;
+
+  /// NEW: disk-cached bar color (for VOD where totalBytes is known).
+  final Color diskCachedColor;
 }
 
 class _VideoScrubber extends StatefulWidget {
@@ -894,14 +940,33 @@ class _VideoProgressIndicatorState extends State<VideoProgressIndicator> {
         }
       }
 
+      // NEW: disk cached percentage (VOD only, when totalBytes is known).
+      double? diskValue;
+      if (controller.value.totalBytes > 0 &&
+          controller.value.cachedBytes >= 0) {
+        final double v =
+            controller.value.cachedBytes / controller.value.totalBytes;
+        diskValue = v.clamp(0.0, 1.0);
+      }
+
       progressIndicator = Stack(
         fit: StackFit.passthrough,
         children: <Widget>[
+          // NEW: bottom-most disk-cached bar (only when we know totalBytes).
+          if (diskValue != null)
+            LinearProgressIndicator(
+              value: diskValue,
+              valueColor: AlwaysStoppedAnimation<Color>(colors.diskCachedColor),
+              backgroundColor: colors.backgroundColor,
+            ),
+          // RAM buffer (what the player reports as buffered ranges).
           LinearProgressIndicator(
             value: maxBuffering / duration,
             valueColor: AlwaysStoppedAnimation<Color>(colors.bufferedColor),
-            backgroundColor: colors.backgroundColor,
+            backgroundColor:
+                diskValue == null ? colors.backgroundColor : Colors.transparent,
           ),
+          // Played position.
           LinearProgressIndicator(
             value: position / duration,
             valueColor: AlwaysStoppedAnimation<Color>(colors.playedColor),

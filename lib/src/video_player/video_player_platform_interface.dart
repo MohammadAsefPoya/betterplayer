@@ -379,6 +379,10 @@ class VideoEvent {
     this.size,
     this.buffered,
     this.position,
+    this.cachedBytes,
+    this.totalBytes,
+    this.percentCached,
+    this.cacheSource,
   });
 
   /// The type of the event.
@@ -406,6 +410,18 @@ class VideoEvent {
 
   ///Seek position
   final Duration? position;
+
+  // total bytes cached so far
+  final int? cachedBytes;
+
+  // content length (-1 for HLS/DASH unknown)
+  final int? totalBytes;
+
+  // 0..100 or -1 when unknown
+  final int? percentCached;
+
+  // "cacheKeyListener" | "diskCacheScan"
+  final String? cacheSource;
 
   @override
   bool operator ==(Object other) {
@@ -466,6 +482,8 @@ enum VideoEventType {
   unknown,
 
   videoSizeChanged,
+
+  cacheUpdate,
 }
 
 /// Describes a discrete segment of time within a video using a [start] and
