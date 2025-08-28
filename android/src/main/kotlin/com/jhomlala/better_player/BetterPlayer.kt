@@ -160,6 +160,8 @@ internal class BetterPlayer(
             .setLoadControl(loadControl)
             .build()
 
+        exoPlayer?.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+
         // WorkManager
         workManager = WorkManager.getInstance(context)
         workerObserverMap = HashMap()
@@ -608,6 +610,9 @@ internal class BetterPlayer(
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
             C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)
+                // Faster start for HLS VOD: lets Exo prepare from the master/variant
+                // playlist without downloading a chunk first (where possible).
+                .setAllowChunklessPreparation(true)
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
             C.TYPE_OTHER -> ProgressiveMediaSource.Factory(
