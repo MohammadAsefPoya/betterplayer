@@ -37,11 +37,14 @@ class VideoPlayerValue {
     this.errorDescription,
     this.isPip = false,
 
-    // NEW: disk-cache snapshot fields with safe defaults.
+    // --- EXISTING (bytes-based) cache snapshot with safe defaults ---
     this.cachedBytes = 0,
     this.totalBytes = -1,
     this.percentCached = -1,
     this.cacheSource,
+
+    // --- NEW: time-based cached duration ahead of playhead (ms) ---
+    this.cachedDurationMs = 0,
   });
 
   /// Returns an instance with a `null` [Duration].
@@ -96,11 +99,15 @@ class VideoPlayerValue {
   /// Is in Picture in Picture Mode
   final bool isPip;
 
-  /// NEW: latest disk-cache snapshot (updated by `cacheUpdate` events).
+  /// Bytes-based cache snapshot (updated by `cacheUpdate` when provided).
   final int cachedBytes; // total cached bytes so far
   final int totalBytes; // -1 when unknown (HLS/DASH)
   final int percentCached; // 0..100 or -1
   final String? cacheSource; // "cacheKeyListener" | "diskCacheScan"
+
+  /// NEW: time-based cached-ahead duration (milliseconds).
+  /// Prefer this for UI (slider buffer) when available.
+  final int cachedDurationMs;
 
   /// Indicates whether or not the video has been loaded and is ready to play.
   bool get initialized => duration != null;
@@ -138,11 +145,14 @@ class VideoPlayerValue {
     double? speed,
     bool? isPip,
 
-    // NEW: cache snapshot overrides
+    // Bytes-based cache snapshot overrides.
     int? cachedBytes,
     int? totalBytes,
     int? percentCached,
     String? cacheSource,
+
+    // NEW: time-based cached-ahead duration override.
+    int? cachedDurationMs,
   }) {
     return VideoPlayerValue(
       duration: duration ?? this.duration,
@@ -158,11 +168,14 @@ class VideoPlayerValue {
       errorDescription: errorDescription ?? this.errorDescription,
       isPip: isPip ?? this.isPip,
 
-      // NEW:
+      // Bytes-based:
       cachedBytes: cachedBytes ?? this.cachedBytes,
       totalBytes: totalBytes ?? this.totalBytes,
       percentCached: percentCached ?? this.percentCached,
       cacheSource: cacheSource ?? this.cacheSource,
+
+      // Time-based:
+      cachedDurationMs: cachedDurationMs ?? this.cachedDurationMs,
     );
   }
 
@@ -182,6 +195,7 @@ class VideoPlayerValue {
         'speed: $speed, '
         'cachedBytes: $cachedBytes, totalBytes: $totalBytes, '
         'percentCached: $percentCached, cacheSource: $cacheSource, '
+        'cachedDurationMs: $cachedDurationMs, '
         'errorDescription: $errorDescription)';
   }
 }
@@ -284,16 +298,22 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           break;
         case VideoEventType.videoSizeChanged:
           value = value.copyWith(size: event.size);
-        // (fallthrough in your original file)
+          break;
+
         case VideoEventType.cacheUpdate:
-          // NEW: keep latest disk-cache snapshot in the controller value.
+          // Keep latest cache snapshot (supports both time-based and bytes-based payloads).
           value = value.copyWith(
-            cachedBytes: event.cachedBytes,
-            totalBytes: event.totalBytes,
-            percentCached: event.percentCached,
-            cacheSource: event.cacheSource,
+            // Time-based: preferred for UI slider (expects 'cachedDurationMs' in event).
+            cachedDurationMs: event.cachedDurationMs ?? value.cachedDurationMs,
+
+            // Bytes-based: still capture if provided by the platform.
+            cachedBytes: event.cachedBytes ?? value.cachedBytes,
+            totalBytes: event.totalBytes ?? value.totalBytes,
+            percentCached: event.percentCached ?? value.percentCached,
+            cacheSource: event.cacheSource ?? value.cacheSource,
           );
           break;
+
         case VideoEventType.unknown:
           break;
       }
@@ -304,7 +324,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         final PlatformException e = object;
         value = value.copyWith(errorDescription: e.message);
       } else {
-        value.copyWith(errorDescription: object.toString());
+        value = value.copyWith(errorDescription: object.toString());
       }
       _timer?.cancel();
       if (!_initializingCompleter.isCompleted) {
@@ -758,7 +778,8 @@ class VideoProgressColors {
   /// color behind both [playedColor] and [bufferedColor] to denote the total
   /// size of the video compared to either of those values.
   ///
-  /// NEW: [diskCachedColor] represents on-disk cached progress (VOD).
+  /// NEW: [diskCachedColor] represents on-disk cached progress (VOD) or
+  /// time-based cached-ahead progress when `cachedDurationMs` is available.
   VideoProgressColors({
     this.playedColor = const Color.fromRGBO(255, 0, 0, 0.7),
     this.bufferedColor = const Color.fromRGBO(50, 50, 200, 0.2),
@@ -781,7 +802,7 @@ class VideoProgressColors {
   /// size of the video compared to either of those values.
   final Color backgroundColor;
 
-  /// NEW: disk-cached bar color (for VOD where totalBytes is known).
+  /// NEW: disk-cached bar color (for VOD or time-based cache).
   final Color diskCachedColor;
 }
 
@@ -940,10 +961,15 @@ class _VideoProgressIndicatorState extends State<VideoProgressIndicator> {
         }
       }
 
-      // NEW: disk cached percentage (VOD only, when totalBytes is known).
+      // Preferred: use time-based cached duration if available.
       double? diskValue;
-      if (controller.value.totalBytes > 0 &&
+      if (controller.value.cachedDurationMs > 0 && duration > 0) {
+        final double v =
+            controller.value.cachedDurationMs / duration.toDouble();
+        diskValue = v.clamp(0.0, 1.0);
+      } else if (controller.value.totalBytes > 0 &&
           controller.value.cachedBytes >= 0) {
+        // Fallback: bytes ratio when totalBytes is known (progressive).
         final double v =
             controller.value.cachedBytes / controller.value.totalBytes;
         diskValue = v.clamp(0.0, 1.0);
@@ -952,7 +978,7 @@ class _VideoProgressIndicatorState extends State<VideoProgressIndicator> {
       progressIndicator = Stack(
         fit: StackFit.passthrough,
         children: <Widget>[
-          // NEW: bottom-most disk-cached bar (only when we know totalBytes).
+          // Bottom-most: disk-cached (time-based preferred, else bytes-based).
           if (diskValue != null)
             LinearProgressIndicator(
               value: diskValue,

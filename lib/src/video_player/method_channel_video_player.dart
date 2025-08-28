@@ -1,6 +1,8 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+// Copyright 2017 The Chromium Authors. All rights
+// reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 import 'dart:async';
 import 'package:better_player/src/configuration/better_player_buffering_configuration.dart';
 import 'package:better_player/src/core/better_player_utils.dart';
@@ -211,33 +213,21 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
 
   @override
   Future<DateTime?> getAbsolutePosition(int? textureId) async {
-    print("Hello this is absolute position method from Custom branch");
     final int? milliseconds = await _channel.invokeMethod<int>(
       'absolutePosition',
       <String, dynamic>{'textureId': textureId},
     );
+    if (milliseconds == null || milliseconds <= 0) return null;
 
-    // Return null if no valid milliseconds value is received
-    if (milliseconds == null || milliseconds <= 0) {
-      return null;
-    }
-
-    // Validate milliseconds against DateTime range
-    const int maxMillis = 8640000000000000; // Max valid milliseconds
-    const int minMillis = -8640000000000000; // Min valid milliseconds
+    const int maxMillis = 8640000000000000;
+    const int minMillis = -8640000000000000;
     if (milliseconds < minMillis || milliseconds > maxMillis) {
-      // Log the error for debugging (optional)
-      var milSecond = milliseconds.clamp(minMillis, maxMillis);
-      print('Invalid milliseconds value: $milliseconds. Returning null.');
-      return DateTime.fromMillisecondsSinceEpoch(
-          milSecond); // Or clamp to maxMillis/minMillis if appropriate
+      var ms = milliseconds.clamp(minMillis, maxMillis);
+      return DateTime.fromMillisecondsSinceEpoch(ms);
     }
-
     try {
       return DateTime.fromMillisecondsSinceEpoch(milliseconds);
-    } catch (e) {
-      // Handle any unexpected errors (optional for extra safety)
-      print('Error creating DateTime: $e');
+    } catch (_) {
       return null;
     }
   }
@@ -381,7 +371,6 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
           );
         case 'bufferingUpdate':
           final List<dynamic> values = map['values'] as List;
-
           return VideoEvent(
             eventType: VideoEventType.bufferingUpdate,
             key: key,
@@ -397,38 +386,32 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             eventType: VideoEventType.bufferingEnd,
             key: key,
           );
-
         case 'play':
           return VideoEvent(
             eventType: VideoEventType.play,
             key: key,
           );
-
         case 'pause':
           return VideoEvent(
             eventType: VideoEventType.pause,
             key: key,
           );
-
         case 'seek':
           return VideoEvent(
             eventType: VideoEventType.seek,
             key: key,
             position: Duration(milliseconds: map['position'] as int),
           );
-
         case 'pipStart':
           return VideoEvent(
             eventType: VideoEventType.pipStart,
             key: key,
           );
-
         case 'pipStop':
           return VideoEvent(
             eventType: VideoEventType.pipStop,
             key: key,
           );
-
         case 'videoSizeChanged':
           final num w = map['width'] as num;
           final num h = map['height'] as num;
@@ -438,20 +421,14 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             size: Size(w.toDouble(), h.toDouble()),
           );
 
+        // NEW: time-based cache update (ms buffered ahead)
         case 'cacheUpdate':
-          // Native (Android) sends: cachedBytes (long), totalBytes (long or -1), percentCached (long or -1), source (String)
-          final int cached = (map['cachedBytes'] as num?)?.toInt() ?? 0;
-          final int total = (map['totalBytes'] as num?)?.toInt() ?? -1;
-          final int percent = (map['percentCached'] as num?)?.toInt() ?? -1;
-          final String? source = map['source'] as String?;
-
+          final int? cachedDurationMs =
+              (map['cachedDurationMs'] as num?)?.toInt();
           return VideoEvent(
             eventType: VideoEventType.cacheUpdate,
             key: key,
-            cachedBytes: cached,
-            totalBytes: total,
-            percentCached: percent,
-            cacheSource: source,
+            cachedDurationMs: cachedDurationMs,
           );
 
         default:

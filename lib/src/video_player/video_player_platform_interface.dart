@@ -383,6 +383,7 @@ class VideoEvent {
     this.totalBytes,
     this.percentCached,
     this.cacheSource,
+    this.cachedDurationMs,
   });
 
   /// The type of the event.
@@ -422,6 +423,9 @@ class VideoEvent {
 
   // "cacheKeyListener" | "diskCacheScan"
   final String? cacheSource;
+
+  // time-based cache payload (ms of media buffered ahead of playhead)
+  final int? cachedDurationMs;
 
   @override
   bool operator ==(Object other) {

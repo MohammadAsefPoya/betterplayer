@@ -105,6 +105,8 @@ internal class BetterPlayer(
     private var cachePollHandler: Handler? = null
     private var cachePollRunnable: Runnable? = null
     private var currentUriPrefix: String? = null
+    private var cacheProgressHandler: Handler? = null
+    private var cacheProgressRunnable: Runnable? = null
 
     init {
         // Build LoadControl with Dart-side buffer values
@@ -255,6 +257,7 @@ internal class BetterPlayer(
             exoPlayer?.setMediaSource(mediaSource)
         }
         exoPlayer?.prepare()
+        startCacheDurationEmitter()
 
         // --- Continuous disk-buffer progress wiring ---
         if (useCache) {
@@ -655,6 +658,31 @@ internal class BetterPlayer(
         eventSink.success(event)
     }
 
+    private fun startCacheDurationEmitter() {
+        stopCacheDurationEmitter()
+        cacheProgressHandler = Handler(Looper.getMainLooper())
+        cacheProgressRunnable = object : Runnable {
+            override fun run() {
+                val curr = exoPlayer?.currentPosition ?: 0L
+                val buff = exoPlayer?.bufferedPosition ?: 0L
+                val cachedDurationMs = if (buff > curr) (buff - curr) else 0L
+
+                val event: MutableMap<String, Any> = HashMap()
+                event["event"] = "cacheUpdate"
+                event["cachedDurationMs"] = cachedDurationMs
+                eventSink.success(event)
+
+                cacheProgressHandler?.postDelayed(this, 500) // every 0.5s
+            }
+        }
+        cacheProgressHandler?.post(cacheProgressRunnable!!)
+    }
+
+    private fun stopCacheDurationEmitter() {
+        cacheProgressHandler?.removeCallbacksAndMessages(null)
+        cacheProgressHandler = null
+        cacheProgressRunnable = null
+    }
     fun setMixWithOthers(mixWithOthers: Boolean) {
         setAudioAttributes(exoPlayer, mixWithOthers)
     }
@@ -673,6 +701,7 @@ internal class BetterPlayer(
         }
         textureEntry.release()
         eventChannel.setStreamHandler(null)
+        stopCacheDurationEmitter()
         surface?.release()
         exoPlayer?.release()
     }
