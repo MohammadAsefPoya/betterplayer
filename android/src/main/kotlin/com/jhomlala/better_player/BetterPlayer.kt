@@ -342,7 +342,6 @@ internal class BetterPlayer(
             // Use OkHttp for license calls as well
             val drmFactory = OkHttpDataSource.Factory(okClient)
                 .setUserAgent(userAgent)
-                .setAllowCrossProtocolRedirects(true)
 
             val httpMediaDrmCallback = HttpMediaDrmCallback(licenseUrl, drmFactory)
             drmHeaders?.forEach { (k, v) -> httpMediaDrmCallback.setKeyRequestProperty(k, v) }
@@ -389,7 +388,6 @@ internal class BetterPlayer(
         val mediaDataSourceFactory: DataSource.Factory = if (isHTTP(uri)) {
             var httpFactory = OkHttpDataSource.Factory(okClient)
                 .setUserAgent(userAgent)
-                .setAllowCrossProtocolRedirects(true)
             headers?.let { httpFactory = httpFactory.setDefaultRequestProperties(it) }
 
             var upstream: DataSource.Factory = httpFactory
