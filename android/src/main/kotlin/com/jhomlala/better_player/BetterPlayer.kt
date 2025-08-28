@@ -51,8 +51,6 @@ import com.google.android.exoplayer2.source.smoothstreaming.DefaultSsChunkSource
 import com.google.android.exoplayer2.source.dash.DashMediaSource
 import com.google.android.exoplayer2.source.dash.DefaultDashChunkSource
 import com.google.android.exoplayer2.source.hls.HlsMediaSource
-import com.google.android.exoplayer2.source.hls.playlist.HlsManifest
-import com.google.android.exoplayer2.source.hls.playlist.HlsMediaPlaylist
 import com.google.android.exoplayer2.source.ProgressiveMediaSource
 import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory
 import io.flutter.plugin.common.EventChannel.EventSink
@@ -68,7 +66,8 @@ import com.google.android.exoplayer2.upstream.DataSource
 import com.google.android.exoplayer2.upstream.DefaultDataSource
 import com.google.android.exoplayer2.upstream.DataSpec
 import com.google.android.exoplayer2.upstream.cache.Cache
-import com.google.android.exoplayer2.upstream.cache.CacheUtil
+import com.google.android.exoplayer2.upstream.cache.ContentMetadata
+import com.google.android.exoplayer2.upstream.cache.CacheKeyFactory
 import com.google.android.exoplayer2.util.UriUtil
 import com.google.android.exoplayer2.util.Util
 import java.io.File
@@ -85,7 +84,7 @@ internal class BetterPlayer(
     customDefaultLoadControl: CustomDefaultLoadControl?,
     result: MethodChannel.Result
 ) {
-    // IMPORTANT: avoid selector shadowing -> make it var and assign in init
+    // NOTE: var + single instance, no shadowing.
     private var exoPlayer: ExoPlayer? = null
     private val eventSink = QueuingEventSink()
     private var trackSelector: DefaultTrackSelector
@@ -106,10 +105,10 @@ internal class BetterPlayer(
         customDefaultLoadControl ?: CustomDefaultLoadControl()
     private var lastSendBufferedPosition = 0L
 
-    // NEW: keep an application context for cache access
+    // App context to access cache safely
     private val appContext: Context = context.applicationContext
 
-    // NEW (Step 1): periodic ticker to emit playableOfflineMs
+    // Step 1: periodic ticker for playableOfflineMs emission
     private var offlineTicker: Handler? = null
     private val offlineRunnable = object : Runnable {
         override fun run() {
@@ -136,7 +135,7 @@ internal class BetterPlayer(
     }
 
     init {
-        // Build LoadControl with Dart-side buffer values
+        // Build LoadControl using Dart-side buffer values
         val loadBuilder = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 this.customDefaultLoadControl.minBufferMs,
@@ -144,31 +143,31 @@ internal class BetterPlayer(
                 this.customDefaultLoadControl.bufferForPlaybackMs,
                 this.customDefaultLoadControl.bufferForPlaybackAfterRebufferMs
             )
-            // allow mixed-quality segments (web-style ABR)
+            // Mixed-quality segments allowed
             .setPrioritizeTimeOverSizeThresholds(false)
 
         loadControl = loadBuilder.build()
 
-        // Track selector with AdaptiveTrackSelection (needed for ABR switching)
+        // Track selector with ABR
         trackSelector = DefaultTrackSelector(
             context,
             AdaptiveTrackSelection.Factory()
         )
 
-        // Build ExoPlayer with custom loadControl + trackSelector
+        // Build ExoPlayer
         exoPlayer = ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .build()
 
-        // Setup worker manager for downloads
+        // WorkManager
         workManager = WorkManager.getInstance(context)
         workerObserverMap = HashMap()
 
-        // Setup Flutter texture + event channel connection
+        // Setup Flutter texture + event channel
         setupVideoPlayer(eventChannel, textureEntry, result)
 
-        // Example analytics listener for video size change
+        // Analytics: video size changes (already wired on Dart)
         exoPlayer?.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoSizeChanged(
                 eventTime: AnalyticsListener.EventTime,
@@ -183,15 +182,13 @@ internal class BetterPlayer(
         })
     }
 
-    // ---- Step 1 helpers: compute "playable without network" (RAM + Disk) ----
+    // -------- Step 1 helpers: RAM + Disk “playable without network” --------
 
-    // Return the shared SimpleCache instance (created by CacheDataSourceFactory when useCache=true).
     private fun playerCache(): Cache? {
-        // CreateCache returns the existing instance if already created.
+        // Returns existing cache instance if already created
         return BetterPlayerCache.createCache(appContext, 1L)
     }
 
-    // Main: how long can we play if the network disappears right now (ms).
     private fun computePlayableOfflineMs(): Long {
         val p = exoPlayer ?: return 0L
         val ramAheadMs = kotlin.math.max(0L, (p.bufferedPosition - p.currentPosition))
@@ -203,20 +200,21 @@ internal class BetterPlayer(
 
         val diskAheadMs = when (type) {
             C.TYPE_OTHER -> diskAheadProgressiveMs(cache, item, p)
-            C.TYPE_HLS   -> diskAheadHlsMs(cache, p)
-            else         -> 0L // DASH/SS optional later
+            C.TYPE_HLS   -> diskAheadHlsMs(cache, p) // reflection-based, no imports
+            else         -> 0L
         }
         return ramAheadMs + kotlin.math.max(0L, diskAheadMs)
     }
 
-    // Progressive: map contiguous cached bytes ahead to time.
+    // Progressive: contiguous cached bytes ahead mapped to time.
     private fun diskAheadProgressiveMs(cache: Cache, item: MediaItem, p: ExoPlayer): Long {
         val durationMs = p.duration.takeIf { it > 0 } ?: return 0L
         val mc = item.localConfiguration ?: return 0L
-        val key = mc.customCacheKey ?: CacheUtil.generateKey(DataSpec(mc.uri))
+        val dataSpec = DataSpec(mc.uri)
+        val key = mc.customCacheKey ?: CacheKeyFactory.DEFAULT.buildCacheKey(dataSpec)
 
         val meta = cache.getContentMetadata(key)
-        val contentLength = CacheUtil.getContentLength(meta) // C.LENGTH_UNSET if unknown
+        val contentLength = ContentMetadata.getContentLength(meta) // C.LENGTH_UNSET if unknown
         val currentMs = p.currentPosition
 
         if (contentLength > 0L) {
@@ -226,13 +224,13 @@ internal class BetterPlayer(
             var aheadBytes = 0L
             while (true) {
                 val len = cache.getCachedLength(key, pos, Long.MAX_VALUE)
-                if (len <= 0) break // hole -> stop
+                if (len <= 0) break // hole
                 aheadBytes += len
                 pos += len
             }
             return (aheadBytes * durationMs / contentLength)
         } else {
-            // Fallback estimate via bitrate
+            // Fallback via bitrate
             val bitrateBps = (p.videoFormat?.bitrate ?: 0).toLong()
             if (bitrateBps <= 0) return 0L
             val startByte = (((bitrateBps / 8.0) * (currentMs / 1000.0))).toLong().coerceAtLeast(0L)
@@ -244,40 +242,50 @@ internal class BetterPlayer(
                 aheadBytes += len
                 pos += len
             }
-            // ms = bits / bps * 1000
-            return ((aheadBytes * 8_000L) / bitrateBps)
+            return ((aheadBytes * 8_000L) / bitrateBps) // ms
         }
     }
 
-    // HLS: add durations of fully cached segments AFTER the current segment.
+    // HLS: sum durations of fully cached segments strictly AFTER the current one (reflection).
     private fun diskAheadHlsMs(cache: Cache, p: ExoPlayer): Long {
         val any = p.currentManifest ?: return 0L
-        val manifest = any as? HlsManifest ?: return 0L
-        val playlist: HlsMediaPlaylist = manifest.mediaPlaylist
+        try {
+            // any is an instance of com.google.android.exoplayer2.source.hls.playlist.HlsManifest
+            val playlistObj = any.javaClass.getField("mediaPlaylist").get(any) ?: return 0L
+            val baseUri = playlistObj.javaClass.getField("baseUri").get(playlistObj) as? String ?: return 0L
+            val startTimeUs = playlistObj.javaClass.getField("startTimeUs").getLong(playlistObj)
+            @Suppress("UNCHECKED_CAST")
+            val segments = playlistObj.javaClass.getField("segments").get(playlistObj) as? List<Any?> ?: return 0L
 
-        val nowUs = p.currentPosition * 1000L
-        val relUs = nowUs - playlist.startTimeUs
-        val segs = playlist.segments
+            val nowUs = p.currentPosition * 1000L
+            val relUs = nowUs - startTimeUs
 
-        var idx = -1
-        for (i in segs.indices) {
-            val s = segs[i]
-            val sStart = s.relativeStartTimeUs
-            val sEnd = sStart + s.durationUs
-            if (relUs >= sStart && relUs < sEnd) { idx = i; break }
+            var idx = -1
+            for (i in segments.indices) {
+                val seg = segments[i] ?: continue
+                val segStartUs = seg.javaClass.getField("relativeStartTimeUs").getLong(seg)
+                val segDurUs = seg.javaClass.getField("durationUs").getLong(seg)
+                val segEndUs = segStartUs + segDurUs
+                if (relUs >= segStartUs && relUs < segEndUs) { idx = i; break }
+            }
+            if (idx < 0) return 0L
+
+            var accUs = 0L
+            for (j in (idx + 1) until segments.size) {
+                val seg = segments[j] ?: continue
+                val url = seg.javaClass.getField("url").get(seg) as? String ?: continue
+                val resolved = UriUtil.resolveToUri(baseUri, url)
+                val key = CacheKeyFactory.DEFAULT.buildCacheKey(DataSpec(resolved))
+                val fullyCached = cache.isCached(key, 0L, Long.MAX_VALUE)
+                if (!fullyCached) break
+                val durUs = seg.javaClass.getField("durationUs").getLong(seg)
+                accUs += durUs
+            }
+            return accUs / 1000L
+        } catch (e: Exception) {
+            Log.w(TAG, "diskAheadHlsMs reflection failed: $e")
+            return 0L
         }
-        if (idx < 0) return 0L
-
-        var accUs = 0L
-        for (j in (idx + 1) until segs.size) {
-            val s = segs[j]
-            val resolved = UriUtil.resolveToUri(playlist.baseUri, s.url)
-            val key = CacheUtil.generateKey(DataSpec(resolved))
-            val fullyCached = cache.isCached(key, 0L, Long.MAX_VALUE)
-            if (!fullyCached) break
-            accUs += s.durationUs
-        }
-        return accUs / 1000L
     }
 
     private fun startOfflineTicker() {
@@ -379,7 +387,7 @@ internal class BetterPlayer(
         }
         exoPlayer?.prepare()
 
-        // START Step 1 ticker after prepare
+        // Start Step 1 ticker now
         startOfflineTicker()
 
         result.success(null)
@@ -443,11 +451,9 @@ internal class BetterPlayer(
                                 val outputData = workInfo.outputData
                                 val filePath =
                                     outputData.getString(BetterPlayerPlugin.FILE_PATH_PARAMETER)
-                                //Bitmap here is already processed and it's very small, so it won't
-                                //break anything.
                                 bitmap = BitmapFactory.decodeFile(filePath)
-                                bitmap?.let { bitmap ->
-                                    callback.onBitmap(bitmap)
+                                bitmap?.let { bmp ->
+                                    callback.onBitmap(bmp)
                                 }
                             }
                             if (state == WorkInfo.State.SUCCEEDED || state == WorkInfo.State.CANCELLED || state == WorkInfo.State.FAILED) {
@@ -494,8 +500,8 @@ internal class BetterPlayer(
 
         playerNotificationManager?.apply {
 
-            exoPlayer?.let {
-                setPlayer(ForwardingPlayer(exoPlayer))
+            exoPlayer?.let { exo ->
+                setPlayer(ForwardingPlayer(exo))
                 setUseNextAction(false)
                 setUsePreviousAction(false)
                 setUseStopAction(false)
@@ -917,7 +923,7 @@ internal class BetterPlayer(
     fun dispose() {
         disposeMediaSession()
         disposeRemoteNotifications()
-        stopOfflineTicker() // STOP Step 1 ticker
+        stopOfflineTicker() // stop Step 1 ticker
         if (isInitialized) {
             exoPlayer?.stop()
         }
