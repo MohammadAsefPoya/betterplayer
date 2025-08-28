@@ -15,7 +15,6 @@ import android.os.Handler
 import android.os.Looper
 import com.jhomlala.better_player.DataSourceUtils.getUserAgent
 import com.jhomlala.better_player.DataSourceUtils.isHTTP
-import com.jhomlala.better_player.DataSourceUtils.getDataSourceFactory
 import io.flutter.plugin.common.EventChannel
 import io.flutter.view.TextureRegistry.SurfaceTextureEntry
 import io.flutter.plugin.common.MethodChannel
@@ -25,6 +24,10 @@ import android.support.v4.media.session.MediaSessionCompat
 import com.google.android.exoplayer2.drm.DrmSessionManager
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
+import okhttp3.OkHttpClient
+import okhttp3.ConnectionPool
+import java.util.concurrent.TimeUnit
+import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSource
 import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection
 import com.google.android.exoplayer2.analytics.AnalyticsListener
 import com.google.android.exoplayer2.video.VideoSize
@@ -35,7 +38,6 @@ import com.google.android.exoplayer2.drm.FrameworkMediaDrm
 import com.google.android.exoplayer2.drm.UnsupportedDrmException
 import com.google.android.exoplayer2.drm.DummyExoMediaDrm
 import com.google.android.exoplayer2.drm.LocalMediaDrmCallback
-import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
 import com.google.android.exoplayer2.source.MediaSource
 import com.google.android.exoplayer2.source.ClippingMediaSource
 import com.google.android.exoplayer2.ui.PlayerNotificationManager.MediaDescriptionAdapter
@@ -54,7 +56,6 @@ import com.google.android.exoplayer2.source.hls.HlsMediaSource
 import com.google.android.exoplayer2.source.ProgressiveMediaSource
 import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory
 import io.flutter.plugin.common.EventChannel.EventSink
-import androidx.media.session.MediaButtonReceiver
 import androidx.work.Data
 import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
@@ -92,6 +93,7 @@ internal class BetterPlayer(
     private var isInitialized = false
     private var surface: Surface? = null
     private var key: String? = null
+    private var useCacheEnabledForThisSource = false
     private var playerNotificationManager: PlayerNotificationManager? = null
     private var refreshHandler: Handler? = null
     private var refreshRunnable: Runnable? = null
@@ -187,6 +189,7 @@ internal class BetterPlayer(
     // -------- Step 1 helpers: RAM + Disk “playable without network” --------
 
     private fun playerCache(): Cache? {
+        if (!useCacheEnabledForThisSource) return null
         // Returns existing cache instance if already created
         return BetterPlayerCache.createCache(appContext, 1L)
     }
@@ -319,17 +322,31 @@ internal class BetterPlayer(
     ) {
         this.key = key
         isInitialized = false
+        useCacheEnabledForThisSource = useCache
         val uri = Uri.parse(dataSource)
-        var dataSourceFactory: DataSource.Factory?
         val userAgent = getUserAgent(headers)
-        if (licenseUrl != null && licenseUrl.isNotEmpty()) {
-            val httpMediaDrmCallback =
-                HttpMediaDrmCallback(licenseUrl, DefaultHttpDataSource.Factory())
-            if (drmHeaders != null) {
-                for ((drmKey, drmValue) in drmHeaders) {
-                    httpMediaDrmCallback.setKeyRequestProperty(drmKey, drmValue)
-                }
-            }
+
+        // --- OkHttp client (shared) ---
+        val okClient = OkHttpClient.Builder()
+            .connectionPool(ConnectionPool(8, 60, TimeUnit.SECONDS))
+            .retryOnConnectionFailure(true)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .build()
+
+        // ---------------- DRM (Widevine/ClearKey) ----------------
+        if (!licenseUrl.isNullOrEmpty()) {
+            // Use OkHttp for license calls as well
+            val drmFactory = OkHttpDataSource.Factory(okClient)
+                .setUserAgent(userAgent)
+                .setAllowCrossProtocolRedirects(true)
+
+            val httpMediaDrmCallback = HttpMediaDrmCallback(licenseUrl, drmFactory)
+            drmHeaders?.forEach { (k, v) -> httpMediaDrmCallback.setKeyRequestProperty(k, v) }
+
             if (Util.SDK_INT < 18) {
                 Log.e(TAG, "Protected content not supported on API levels below 18")
                 drmSessionManager = null
@@ -344,16 +361,16 @@ internal class BetterPlayer(
                                 val mediaDrm = FrameworkMediaDrm.newInstance(uuid!!)
                                 // Force L3.
                                 mediaDrm.setPropertyString("securityLevel", "L3")
-                                return@setUuidAndExoMediaDrmProvider mediaDrm
+                                mediaDrm
                             } catch (e: UnsupportedDrmException) {
-                                return@setUuidAndExoMediaDrmProvider DummyExoMediaDrm()
+                                DummyExoMediaDrm()
                             }
                         }
                         .setMultiSession(false)
                         .build(httpMediaDrmCallback)
                 }
             }
-        } else if (clearKey != null && clearKey.isNotEmpty()) {
+        } else if (!clearKey.isNullOrEmpty()) {
             drmSessionManager = if (Util.SDK_INT < 18) {
                 Log.e(TAG, "Protected content not supported on API levels below 18")
                 null
@@ -367,20 +384,29 @@ internal class BetterPlayer(
         } else {
             drmSessionManager = null
         }
-        if (isHTTP(uri)) {
-            dataSourceFactory = getDataSourceFactory(userAgent, headers)
+
+        // ---------------- Data source (OkHttp) ----------------
+        val mediaDataSourceFactory: DataSource.Factory = if (isHTTP(uri)) {
+            var httpFactory = OkHttpDataSource.Factory(okClient)
+                .setUserAgent(userAgent)
+                .setAllowCrossProtocolRedirects(true)
+            headers?.let { httpFactory = httpFactory.setDefaultRequestProperties(it) }
+
+            var upstream: DataSource.Factory = httpFactory
             if (useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
-                dataSourceFactory = CacheDataSourceFactory(
+                upstream = CacheDataSourceFactory(
                     context,
                     maxCacheSize,
                     maxCacheFileSize,
-                    dataSourceFactory
+                    upstream
                 )
             }
+            upstream
         } else {
-            dataSourceFactory = DefaultDataSource.Factory(context)
+            DefaultDataSource.Factory(context)
         }
-        val mediaSource = buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context)
+
+        val mediaSource = buildMediaSource(uri, mediaDataSourceFactory, formatHint, cacheKey, context)
         if (overriddenDuration != 0L) {
             val clippingMediaSource = ClippingMediaSource(mediaSource, 0, overriddenDuration * 1000)
             exoPlayer?.setMediaSource(clippingMediaSource)
@@ -389,7 +415,7 @@ internal class BetterPlayer(
         }
         exoPlayer?.prepare()
 
-        // Start Step 1 ticker now
+        // Start offline playable ticker now
         startOfflineTicker()
 
         result.success(null)
