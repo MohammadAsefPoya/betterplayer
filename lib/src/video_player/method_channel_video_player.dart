@@ -431,10 +431,7 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
           final int? legacyCachedMs =
               (map['cachedDurationMs'] as num?)?.toInt();
           final int? cachedDurationMs =
-              diskAheadMs ?? playableOfflineMs ?? legacyCachedMs;
-
-          print(
-              'diskAheadMs: $diskAheadMs,............. playableOfflineMs: $playableOfflineMs,.................. legacyCachedMs: $legacyCachedMs, cachedDurationMs: $cachedDurationMs');
+              playableOfflineMs ?? diskAheadMs ?? legacyCachedMs;
           return VideoEvent(
             eventType: VideoEventType.cacheUpdate,
             key: key,
