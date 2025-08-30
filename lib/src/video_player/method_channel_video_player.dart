@@ -1,7 +1,6 @@
 // Copyright 2017 The Chromium Authors.
-// All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Use of this source code is governed by a BSD-style license
+// that can be found in the LICENSE file.
 
 import 'dart:async';
 import 'package:better_player/src/configuration/better_player_buffering_configuration.dart';
@@ -421,21 +420,25 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             size: Size(w.toDouble(), h.toDouble()),
           );
 
-        // UPDATED: time-based cache update (map new Android fields to cachedDurationMs).
-        // We prefer diskAheadMs (disk-only), fallback to playableOfflineMs (RAM+disk),
-        // then to legacy cachedDurationMs if present.
+        // NEW: time-based cache updates from Android
         case 'cacheUpdate':
-          final int? diskAheadMs = (map['diskAheadMs'] as num?)?.toInt();
           final int? playableOfflineMs =
               (map['playableOfflineMs'] as num?)?.toInt();
-          final int? legacyCachedMs =
-              (map['cachedDurationMs'] as num?)?.toInt();
-          final int? cachedDurationMs =
-              playableOfflineMs ?? diskAheadMs ?? legacyCachedMs;
+          final int? ramAheadMs = (map['ramAheadMs'] as num?)?.toInt();
+          final int? diskAheadMs = (map['diskAheadMs'] as num?)?.toInt();
+          final int? currentPositionMs =
+              (map['currentPositionMs'] as num?)?.toInt();
+          final int? bufferedPositionMs =
+              (map['bufferedPositionMs'] as num?)?.toInt();
+
           return VideoEvent(
             eventType: VideoEventType.cacheUpdate,
             key: key,
-            cachedDurationMs: cachedDurationMs,
+            playableOfflineMs: playableOfflineMs,
+            ramAheadMs: ramAheadMs,
+            diskAheadMs: diskAheadMs,
+            currentPositionMs: currentPositionMs,
+            bufferedPositionMs: bufferedPositionMs,
           );
 
         default:

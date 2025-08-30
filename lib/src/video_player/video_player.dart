@@ -36,15 +36,11 @@ class VideoPlayerValue {
     this.speed = 1.0,
     this.errorDescription,
     this.isPip = false,
-
-    // --- EXISTING (bytes-based) cache snapshot with safe defaults ---
-    this.cachedBytes = 0,
-    this.totalBytes = -1,
-    this.percentCached = -1,
-    this.cacheSource,
-
-    // --- NEW: time-based cached duration ahead of playhead (ms) ---
-    this.cachedDurationMs = 0,
+    this.ramAheadMs = 0,
+    this.diskAheadMs = 0,
+    this.currentPositionMs = 0,
+    this.playableOfflineMs = 0,
+    this.bufferedPositionMs = 0,
   });
 
   /// Returns an instance with a `null` [Duration].
@@ -99,15 +95,20 @@ class VideoPlayerValue {
   /// Is in Picture in Picture Mode
   final bool isPip;
 
-  /// Bytes-based cache snapshot (updated by `cacheUpdate` when provided).
-  final int cachedBytes; // total cached bytes so far
-  final int totalBytes; // -1 when unknown (HLS/DASH)
-  final int percentCached; // 0..100 or -1
-  final String? cacheSource; // "cacheKeyListener" | "diskCacheScan"
+  /// Total time you can continue playback **without network** (RAM + disk), ms.
+  final int? playableOfflineMs;
 
-  /// NEW: time-based cached-ahead duration (milliseconds).
-  /// Prefer this for UI (slider buffer) when available.
-  final int cachedDurationMs;
+  /// Exo bufferedPosition - currentPosition (RAM), ms.
+  final int? ramAheadMs;
+
+  /// Fully cached on disk strictly after the current buffer, ms.
+  final int? diskAheadMs;
+
+  /// Current position in ms (convenience mirror from platform event).
+  final int? currentPositionMs;
+
+  /// Buffered position in ms (convenience mirror from platform event).
+  final int? bufferedPositionMs;
 
   /// Indicates whether or not the video has been loaded and is ready to play.
   bool get initialized => duration != null;
@@ -144,15 +145,11 @@ class VideoPlayerValue {
     String? errorDescription,
     double? speed,
     bool? isPip,
-
-    // Bytes-based cache snapshot overrides.
-    int? cachedBytes,
-    int? totalBytes,
-    int? percentCached,
-    String? cacheSource,
-
-    // NEW: time-based cached-ahead duration override.
-    int? cachedDurationMs,
+    int? playableOfflineMs,
+    int? ramAheadMs,
+    int? diskAheadMs,
+    int? currentPositionMs,
+    int? bufferedPositionMs,
   }) {
     return VideoPlayerValue(
       duration: duration ?? this.duration,
@@ -168,14 +165,12 @@ class VideoPlayerValue {
       errorDescription: errorDescription ?? this.errorDescription,
       isPip: isPip ?? this.isPip,
 
-      // Bytes-based:
-      cachedBytes: cachedBytes ?? this.cachedBytes,
-      totalBytes: totalBytes ?? this.totalBytes,
-      percentCached: percentCached ?? this.percentCached,
-      cacheSource: cacheSource ?? this.cacheSource,
-
       // Time-based:
-      cachedDurationMs: cachedDurationMs ?? this.cachedDurationMs,
+      ramAheadMs: ramAheadMs ?? this.ramAheadMs,
+      diskAheadMs: diskAheadMs ?? this.diskAheadMs,
+      bufferedPositionMs: bufferedPositionMs ?? this.bufferedPositionMs,
+      currentPositionMs: currentPositionMs ?? this.currentPositionMs,
+      playableOfflineMs: playableOfflineMs ?? this.playableOfflineMs,
     );
   }
 
@@ -193,9 +188,8 @@ class VideoPlayerValue {
         'isBuffering: $isBuffering, '
         'volume: $volume, '
         'speed: $speed, '
-        'cachedBytes: $cachedBytes, totalBytes: $totalBytes, '
-        'percentCached: $percentCached, cacheSource: $cacheSource, '
-        'cachedDurationMs: $cachedDurationMs, '
+        'ramAheadMs: $ramAheadMs, diskAheadMs: $diskAheadMs, '
+        'bufferedPositionMs: $bufferedPositionMs, currentPositionMs: $currentPositionMs, playableOfflineMs: $playableOfflineMs, '
         'errorDescription: $errorDescription)';
   }
 }
@@ -301,16 +295,16 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           break;
 
         case VideoEventType.cacheUpdate:
-          // Keep latest cache snapshot (supports both time-based and bytes-based payloads).
+          // Keep latest time-based cache snapshot from the platform.
           value = value.copyWith(
-            // Time-based: preferred for UI slider (expects 'cachedDurationMs' in event).
-            cachedDurationMs: event.cachedDurationMs ?? value.cachedDurationMs,
-
-            // Bytes-based: still capture if provided by the platform.
-            cachedBytes: event.cachedBytes ?? value.cachedBytes,
-            totalBytes: event.totalBytes ?? value.totalBytes,
-            percentCached: event.percentCached ?? value.percentCached,
-            cacheSource: event.cacheSource ?? value.cacheSource,
+            ramAheadMs: event.ramAheadMs ?? value.ramAheadMs,
+            diskAheadMs: event.diskAheadMs ?? value.diskAheadMs,
+            bufferedPositionMs:
+                event.bufferedPositionMs ?? value.bufferedPositionMs,
+            currentPositionMs:
+                event.currentPositionMs ?? value.currentPositionMs,
+            playableOfflineMs:
+                event.playableOfflineMs ?? value.playableOfflineMs,
           );
           break;
 
@@ -779,7 +773,7 @@ class VideoProgressColors {
   /// size of the video compared to either of those values.
   ///
   /// NEW: [diskCachedColor] represents on-disk cached progress (VOD) or
-  /// time-based cached-ahead progress when `cachedDurationMs` is available.
+  /// time-based cached-ahead progress when `playableOfflineMs` is available.
   VideoProgressColors({
     this.playedColor = const Color.fromRGBO(255, 0, 0, 0.7),
     this.bufferedColor = const Color.fromRGBO(50, 50, 200, 0.2),
@@ -887,7 +881,8 @@ class VideoProgressIndicator extends StatefulWidget {
   VideoProgressIndicator(
     this.controller, {
     VideoProgressColors? colors,
-    this.allowScrubbing,
+    this.allowScrubbing =
+        false, // <- default to false (prevents null-assert crash)
     this.padding = const EdgeInsets.only(top: 5.0),
     Key? key,
   })  : colors = colors ?? VideoProgressColors(),
@@ -953,6 +948,7 @@ class _VideoProgressIndicatorState extends State<VideoProgressIndicator> {
       final int duration = controller.value.duration!.inMilliseconds;
       final int position = controller.value.position.inMilliseconds;
 
+      // RAM buffer (end point) from buffered ranges for compatibility
       int maxBuffering = 0;
       for (final DurationRange range in controller.value.buffered) {
         final int end = range.end.inMilliseconds;
@@ -960,41 +956,46 @@ class _VideoProgressIndicatorState extends State<VideoProgressIndicator> {
           maxBuffering = end;
         }
       }
+      // If platform gave a direct bufferedPositionMs, prefer it.
+      if ((controller.value.bufferedPositionMs ?? 0) > 0) {
+        maxBuffering = controller.value.bufferedPositionMs!;
+      }
 
-      // Preferred: use time-based cached duration if available.
+      // --- Disk/Offline bar (bottom-most) ---
+      // Show how far you can continue playback **without network**:
+      // end = position + playableOfflineMs  (includes RAM + disk ahead)
       double? diskValue;
-      if (controller.value.cachedDurationMs > 0 && duration > 0) {
-        final double v =
-            controller.value.cachedDurationMs / duration.toDouble();
-        diskValue = v.clamp(0.0, 1.0);
-      } else if (controller.value.totalBytes > 0 &&
-          controller.value.cachedBytes >= 0) {
-        // Fallback: bytes ratio when totalBytes is known (progressive).
-        final double v =
-            controller.value.cachedBytes / controller.value.totalBytes;
-        diskValue = v.clamp(0.0, 1.0);
+      final int aheadMs = controller.value.playableOfflineMs ??
+          ((controller.value.ramAheadMs ?? 0) +
+              (controller.value.diskAheadMs ?? 0));
+
+      if (aheadMs > 0 && duration > 0) {
+        int diskEndMs = position + aheadMs;
+        if (diskEndMs < 0) diskEndMs = 0;
+        if (diskEndMs > duration) diskEndMs = duration;
+        diskValue = diskEndMs / duration;
       }
 
       progressIndicator = Stack(
         fit: StackFit.passthrough,
         children: <Widget>[
-          // Bottom-most: disk-cached (time-based preferred, else bytes-based).
+          // Bottom-most: offline coverage (RAM + disk).
           if (diskValue != null)
             LinearProgressIndicator(
               value: diskValue,
               valueColor: AlwaysStoppedAnimation<Color>(colors.diskCachedColor),
               backgroundColor: colors.backgroundColor,
             ),
-          // RAM buffer (what the player reports as buffered ranges).
+          // RAM buffer on top (what the player reports as buffered ranges).
           LinearProgressIndicator(
-            value: maxBuffering / duration,
+            value: duration > 0 ? (maxBuffering / duration) : 0.0,
             valueColor: AlwaysStoppedAnimation<Color>(colors.bufferedColor),
             backgroundColor:
                 diskValue == null ? colors.backgroundColor : Colors.transparent,
           ),
           // Played position.
           LinearProgressIndicator(
-            value: position / duration,
+            value: duration > 0 ? (position / duration) : 0.0,
             valueColor: AlwaysStoppedAnimation<Color>(colors.playedColor),
             backgroundColor: Colors.transparent,
           ),
@@ -1010,7 +1011,7 @@ class _VideoProgressIndicatorState extends State<VideoProgressIndicator> {
       padding: widget.padding,
       child: progressIndicator,
     );
-    if (widget.allowScrubbing!) {
+    if (widget.allowScrubbing == true) {
       return _VideoScrubber(
         controller: controller,
         child: paddedProgressIndicator,

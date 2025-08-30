@@ -372,19 +372,18 @@ class VideoEvent {
   ///
   /// Depending on the [eventType], the [duration], [size] and [buffered]
   /// arguments can be null.
-  VideoEvent({
-    required this.eventType,
-    required this.key,
-    this.duration,
-    this.size,
-    this.buffered,
-    this.position,
-    this.cachedBytes,
-    this.totalBytes,
-    this.percentCached,
-    this.cacheSource,
-    this.cachedDurationMs,
-  });
+  VideoEvent(
+      {required this.eventType,
+      required this.key,
+      this.duration,
+      this.size,
+      this.buffered,
+      this.position,
+      this.ramAheadMs,
+      this.diskAheadMs,
+      this.currentPositionMs,
+      this.bufferedPositionMs,
+      this.playableOfflineMs});
 
   /// The type of the event.
   final VideoEventType eventType;
@@ -412,20 +411,16 @@ class VideoEvent {
   ///Seek position
   final Duration? position;
 
-  // total bytes cached so far
-  final int? cachedBytes;
+  // ramAheadMs + diskAheadMs
+  final int? playableOfflineMs;
 
-  // content length (-1 for HLS/DASH unknown)
-  final int? totalBytes;
+  // Exo bufferedPosition - currentPosition
+  final int? ramAheadMs;
 
-  // 0..100 or -1 when unknown
-  final int? percentCached;
-
-  // "cacheKeyListener" | "diskCacheScan"
-  final String? cacheSource;
-
-  // time-based cache payload (ms of media buffered ahead of playhead)
-  final int? cachedDurationMs;
+  // fully cached on disk after current buffer
+  final int? diskAheadMs;
+  final int? currentPositionMs;
+  final int? bufferedPositionMs;
 
   @override
   bool operator ==(Object other) {

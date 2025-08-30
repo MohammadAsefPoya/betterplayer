@@ -14,71 +14,71 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import com.google.android.exoplayer2.source.LoadEventInfo
-import com.google.android.exoplayer2.source.MediaLoadData
-import java.io.IOException
-import com.jhomlala.better_player.DataSourceUtils.getUserAgent
-import com.jhomlala.better_player.DataSourceUtils.isHTTP
-import io.flutter.plugin.common.EventChannel
-import io.flutter.view.TextureRegistry.SurfaceTextureEntry
-import io.flutter.plugin.common.MethodChannel
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
-import com.google.android.exoplayer2.ui.PlayerNotificationManager
-import android.support.v4.media.session.MediaSessionCompat
-import com.google.android.exoplayer2.drm.DrmSessionManager
-import androidx.work.WorkManager
-import androidx.work.WorkInfo
-import okhttp3.OkHttpClient
-import okhttp3.ConnectionPool
-import java.util.concurrent.TimeUnit
-import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSource
-import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection
-import com.google.android.exoplayer2.analytics.AnalyticsListener
-import com.google.android.exoplayer2.video.VideoSize
-import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
-import com.google.android.exoplayer2.drm.DefaultDrmSessionManager
-import com.google.android.exoplayer2.drm.FrameworkMediaDrm
-import com.google.android.exoplayer2.drm.UnsupportedDrmException
-import com.google.android.exoplayer2.drm.DummyExoMediaDrm
-import com.google.android.exoplayer2.drm.LocalMediaDrmCallback
-import com.google.android.exoplayer2.source.MediaSource
-import com.google.android.exoplayer2.source.ClippingMediaSource
-import com.google.android.exoplayer2.ui.PlayerNotificationManager.MediaDescriptionAdapter
-import com.google.android.exoplayer2.ui.PlayerNotificationManager.BitmapCallback
-import androidx.work.OneTimeWorkRequest
-import android.support.v4.media.session.PlaybackStateCompat
-import android.support.v4.media.MediaMetadataCompat
 import android.util.Log
 import android.view.Surface
 import androidx.lifecycle.Observer
-import com.google.android.exoplayer2.source.smoothstreaming.SsMediaSource
-import com.google.android.exoplayer2.source.smoothstreaming.DefaultSsChunkSource
+import androidx.work.Data
+import androidx.work.OneTimeWorkRequest
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import com.google.android.exoplayer2.C
+import com.google.android.exoplayer2.ExoPlayer
+import com.google.android.exoplayer2.ForwardingPlayer
+import com.google.android.exoplayer2.PlaybackException
+import com.google.android.exoplayer2.PlaybackParameters
+import com.google.android.exoplayer2.SeekParameters
+import com.google.android.exoplayer2.Timeline
+import com.google.android.exoplayer2.audio.AudioAttributes
+import com.google.android.exoplayer2.analytics.AnalyticsListener
+import com.google.android.exoplayer2.drm.DefaultDrmSessionManager
+import com.google.android.exoplayer2.drm.DrmSessionManager
+import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
+import com.google.android.exoplayer2.drm.DummyExoMediaDrm
+import com.google.android.exoplayer2.drm.FrameworkMediaDrm
+import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
+import com.google.android.exoplayer2.drm.LocalMediaDrmCallback
+import com.google.android.exoplayer2.drm.UnsupportedDrmException
+import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
+import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSource
+import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory
+import com.google.android.exoplayer2.source.ClippingMediaSource
+import com.google.android.exoplayer2.source.MediaSource
+import com.google.android.exoplayer2.source.ProgressiveMediaSource
 import com.google.android.exoplayer2.source.dash.DashMediaSource
 import com.google.android.exoplayer2.source.dash.DefaultDashChunkSource
 import com.google.android.exoplayer2.source.hls.HlsMediaSource
-import com.google.android.exoplayer2.source.ProgressiveMediaSource
-import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory
-import io.flutter.plugin.common.EventChannel.EventSink
-import androidx.work.Data
-import com.google.android.exoplayer2.*
-import com.google.android.exoplayer2.audio.AudioAttributes
-import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
-import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
+import com.google.android.exoplayer2.source.smoothstreaming.DefaultSsChunkSource
+import com.google.android.exoplayer2.source.smoothstreaming.SsMediaSource
+import com.google.android.exoplayer2.trackselection.AdaptiveTrackSelection
+import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
+import com.google.android.exoplayer2.ui.PlayerNotificationManager
+import com.google.android.exoplayer2.ui.PlayerNotificationManager.BitmapCallback
+import com.google.android.exoplayer2.ui.PlayerNotificationManager.MediaDescriptionAdapter
 import com.google.android.exoplayer2.upstream.DataSource
-import com.google.android.exoplayer2.upstream.DefaultDataSource
 import com.google.android.exoplayer2.upstream.DataSpec
+import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
+import com.google.android.exoplayer2.upstream.DefaultDataSource
+import com.google.android.exoplayer2.upstream.DefaultLoadErrorHandlingPolicy
 import com.google.android.exoplayer2.upstream.cache.Cache
-import com.google.android.exoplayer2.upstream.cache.ContentMetadata
+import com.google.android.exoplayer2.upstream.cache.CacheDataSink
+import com.google.android.exoplayer2.upstream.cache.CacheDataSource
 import com.google.android.exoplayer2.upstream.cache.CacheKeyFactory
+import com.google.android.exoplayer2.upstream.cache.ContentMetadata
 import com.google.android.exoplayer2.util.UriUtil
 import com.google.android.exoplayer2.util.Util
+import com.google.android.exoplayer2.video.VideoSize
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.EventChannel.EventSink
+import io.flutter.plugin.common.MethodChannel
+import io.flutter.view.TextureRegistry.SurfaceTextureEntry
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
 import java.io.File
+import java.io.IOException
 import java.lang.Exception
 import java.lang.IllegalStateException
-import java.util.*
+import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
 
@@ -103,7 +103,7 @@ internal class BetterPlayer(
     private var refreshRunnable: Runnable? = null
     private var exoPlayerEventListener: Player.Listener? = null
     private var bitmap: Bitmap? = null
-    private var mediaSession: MediaSessionCompat? = null
+    private var mediaSession: android.support.v4.media.session.MediaSessionCompat? = null
     private var drmSessionManager: DrmSessionManager? = null
     private val workManager: WorkManager
     private val workerObserverMap: HashMap<UUID, Observer<WorkInfo?>>
@@ -115,13 +115,20 @@ internal class BetterPlayer(
     private var errorWindowStartMs: Long = 0
     private val errorWindowMs = 8_000L
     private val errorThreshold = 2
-    private val floorCapWhenErrorsBps = 600_000 
+    private val floorCapWhenErrorsBps = 600_000
 
     // Schedules lifting of temporary caps
     private var capLiftHandler: Handler? = null
 
     // App context to access cache safely
     private val appContext: Context = context.applicationContext
+
+    // Bandwidth meter (class property, not inside init)
+    private val bandwidthMeter: DefaultBandwidthMeter =
+        DefaultBandwidthMeter.Builder(appContext)
+            .setInitialBitrateEstimate(600_000L)   // start modestly (~600 kbps)
+            .setResetOnNetworkTypeChange(true)     // Wi‑Fi <-> Cell resets estimate
+            .build()
 
     // Step 1: periodic ticker for playableOfflineMs emission
     private var offlineTicker: Handler? = null
@@ -165,8 +172,9 @@ internal class BetterPlayer(
                 this.customDefaultLoadControl.bufferForPlaybackMs,
                 this.customDefaultLoadControl.bufferForPlaybackAfterRebufferMs
             )
-            // Mixed-quality segments allowed
-            .setPrioritizeTimeOverSizeThresholds(false)
+            // CRITICAL for YouTube-like behavior (time-based buffering):
+            .setTargetBufferBytes(C.LENGTH_UNSET)          // remove byte cap
+            .setPrioritizeTimeOverSizeThresholds(true)
 
         loadControl = loadBuilder.build()
 
@@ -185,6 +193,7 @@ internal class BetterPlayer(
         exoPlayer = ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
+            .setBandwidthMeter(bandwidthMeter)
             .build()
 
         exoPlayer?.setSeekParameters(SeekParameters.CLOSEST_SYNC)
@@ -196,7 +205,7 @@ internal class BetterPlayer(
         // Setup Flutter texture + event channel
         setupVideoPlayer(eventChannel, textureEntry, result)
 
-        // Analytics: video size changes (already wired on Dart)
+        // Analytics: video size changes + bandwidth
         exoPlayer?.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoSizeChanged(
                 eventTime: AnalyticsListener.EventTime,
@@ -215,19 +224,14 @@ internal class BetterPlayer(
                 totalBytesLoaded: Long,
                 bitrateEstimate: Long
             ) {
+                // Keep estimate for diagnostics; no auto-capping here.
                 lastBandwidthEstimateBps = bitrateEstimate
-                // If estimate is low, temporarily cap below it to stabilize.
-                if (bitrateEstimate > 0 && bitrateEstimate < 1_200_000) { // < ~1.2 Mbps
-                    val safeCap = (bitrateEstimate * 7 / 10).toInt().coerceAtLeast(300_000)
-                    applyBitrateCap(safeCap)
-                    scheduleCapLift() // will lift automatically after a short READY period
-                }
             }
 
             override fun onLoadError(
                 eventTime: AnalyticsListener.EventTime,
-                loadEventInfo: LoadEventInfo,
-                mediaLoadData: MediaLoadData,
+                loadEventInfo: com.google.android.exoplayer2.source.LoadEventInfo,
+                mediaLoadData: com.google.android.exoplayer2.source.MediaLoadData,
                 error: IOException,
                 wasCanceled: Boolean
             ) {
@@ -236,9 +240,8 @@ internal class BetterPlayer(
                 recentLoadErrors++
 
                 if (recentLoadErrors >= errorThreshold) {
-                    // We’re struggling: clamp harder for a bit.
+                    // We’re struggling: clamp harder for a bit, then lift.
                     applyBitrateCap(floorCapWhenErrorsBps)
-                    // Hold cap slightly longer (override the usual 2.5s if you want):
                     capLiftHandler?.removeCallbacksAndMessages(null)
                     capLiftHandler = Handler(Looper.getMainLooper())
                     capLiftHandler?.postDelayed({ liftBitrateCap() }, 5_000L)
@@ -266,7 +269,7 @@ internal class BetterPlayer(
 
         val diskAheadMs = when (type) {
             C.TYPE_OTHER -> diskAheadProgressiveMs(cache, item, p)
-            C.TYPE_HLS   -> diskAheadHlsMs(cache, p) // reflection-based, no imports
+            C.TYPE_HLS   -> diskAheadHlsMs(cache, p) // reflection-based, no imports of HlsPlaylistModel
             else         -> 0L
         }
         return ramAheadMs + kotlin.math.max(0L, diskAheadMs)
@@ -296,12 +299,29 @@ internal class BetterPlayer(
         capLiftHandler?.postDelayed({ liftBitrateCap() }, delayMs)
     }
 
+    // Stick to current track while rebuffering to avoid variant thrash
+    private fun capToCurrentTrackPlus(headroomBps: Int = 50_000) {
+        val cur = exoPlayer?.videoFormat?.bitrate ?: return
+        applyBitrateCap((cur + headroomBps).coerceAtLeast(128_000))
+    }
+
+    // Normalize keys so tokenized/query URLs still hit cache
+    private fun normalizeKey(raw: String): String = try {
+        Uri.parse(raw).buildUpon().clearQuery().build().toString()
+    } catch (_: Exception) {
+        raw
+    }
+
     // Progressive: contiguous cached bytes ahead mapped to time.
-    private fun diskAheadProgressiveMs(cache: Cache, item: MediaItem, p: ExoPlayer): Long {
+    private fun diskAheadProgressiveMs(cache: Cache, item: com.google.android.exoplayer2.MediaItem, p: ExoPlayer): Long {
         val durationMs = p.duration.takeIf { it > 0 } ?: return 0L
         val mc = item.localConfiguration ?: return 0L
         val dataSpec = DataSpec(mc.uri)
-        val key = mc.customCacheKey ?: CacheKeyFactory.DEFAULT.buildCacheKey(dataSpec)
+        val keyFactory = CacheKeyFactory { ds ->
+            val raw = ds.key ?: ds.uri.toString()
+            normalizeKey(raw)
+        }
+        val key = mc.customCacheKey ?: keyFactory.buildCacheKey(dataSpec)
 
         val meta = cache.getContentMetadata(key)
         val contentLength = ContentMetadata.getContentLength(meta) // C.LENGTH_UNSET if unknown
@@ -360,12 +380,17 @@ internal class BetterPlayer(
             }
             if (idx < 0) return 0L
 
+            val keyFactory = CacheKeyFactory { ds ->
+                val raw = ds.key ?: ds.uri.toString()
+                normalizeKey(raw)
+            }
+
             var accUs = 0L
             for (j in (idx + 1) until segments.size) {
                 val seg = segments[j] ?: continue
                 val url = seg.javaClass.getField("url").get(seg) as? String ?: continue
                 val resolved = UriUtil.resolveToUri(baseUri, url)
-                val key = CacheKeyFactory.DEFAULT.buildCacheKey(DataSpec(resolved))
+                val key = keyFactory.buildCacheKey(DataSpec(resolved))
                 val fullyCached = cache.isCached(key, 0L, Long.MAX_VALUE)
                 if (!fullyCached) break
                 val durUs = seg.javaClass.getField("durationUs").getLong(seg)
@@ -409,22 +434,21 @@ internal class BetterPlayer(
         isInitialized = false
         useCacheEnabledForThisSource = useCache
         val uri = Uri.parse(dataSource)
-        val userAgent = getUserAgent(headers)
+        val userAgent = DataSourceUtils.getUserAgent(headers)
 
         // --- OkHttp client (shared) ---
         val okClient = OkHttpClient.Builder()
-            .connectionPool(ConnectionPool(8, 60, TimeUnit.SECONDS))
+            .connectionPool(ConnectionPool(8, 60, java.util.concurrent.TimeUnit.SECONDS))
             .retryOnConnectionFailure(true)
             .followRedirects(true)
             .followSslRedirects(true)
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             .build()
 
         // ---------------- DRM (Widevine/ClearKey) ----------------
         if (!licenseUrl.isNullOrEmpty()) {
-            // Use OkHttp for license calls as well
             val drmFactory = OkHttpDataSource.Factory(okClient)
                 .setUserAgent(userAgent)
 
@@ -469,22 +493,46 @@ internal class BetterPlayer(
             drmSessionManager = null
         }
 
-        // ---------------- Data source (OkHttp) ----------------
-        val mediaDataSourceFactory: DataSource.Factory = if (isHTTP(uri)) {
-            var httpFactory = OkHttpDataSource.Factory(okClient)
-                .setUserAgent(userAgent)
-            headers?.let { httpFactory = httpFactory.setDefaultRequestProperties(it) }
+        // ---------------- Data source (OkHttp + optional cache) ----------------
+        val mediaDataSourceFactory: DataSource.Factory = if (DataSourceUtils.isHTTP(uri)) {
+            // Upstream over OkHttp
+            var upstream: DataSource.Factory =
+                OkHttpDataSource.Factory(okClient)
+                    .setUserAgent(userAgent)
+                    .apply { headers?.let { setDefaultRequestProperties(it) } }
 
-            var upstream: DataSource.Factory = httpFactory
             if (useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
-                upstream = CacheDataSourceFactory(
-                    context,
-                    maxCacheSize,
-                    maxCacheFileSize,
-                    upstream
-                )
+                val cache = BetterPlayerCache.createCache(appContext, maxCacheSize)
+
+                val cacheEventListener = object : CacheDataSource.EventListener {
+                    override fun onCachedBytesRead(cacheSizeBytes: Long, cachedBytesRead: Long) {
+                        Log.d(TAG, "CacheDataSource: cachedBytesRead=$cachedBytesRead size=$cacheSizeBytes")
+                    }
+                    override fun onCacheIgnored(reason: Int) {
+                        Log.w(TAG, "CacheDataSource: cache ignored, reason=$reason")
+                    }
+                }
+
+                // Normalize keys: drop query params so token refreshes still hit cache
+                val stableKeyFactory = CacheKeyFactory { ds ->
+                    val raw = ds.key ?: ds.uri.toString()
+                    normalizeKey(raw)
+                }
+
+                CacheDataSource.Factory()
+                    .setCache(cache)
+                    .setUpstreamDataSourceFactory(upstream)
+                    .setCacheWriteDataSinkFactory(
+                        CacheDataSink.Factory()
+                            .setCache(cache)
+                            .setFragmentSize(maxCacheFileSize)
+                    )
+                    .setCacheKeyFactory(stableKeyFactory)
+                    .setEventListener(cacheEventListener)
+                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            } else {
+                upstream
             }
-            upstream
         } else {
             DefaultDataSource.Factory(context)
         }
@@ -497,8 +545,6 @@ internal class BetterPlayer(
             exoPlayer?.setMediaSource(mediaSource)
         }
         exoPlayer?.prepare()
-        applyBitrateCap(1_200_000)
-        scheduleCapLift()
 
         // Start offline playable ticker now
         startOfflineTicker()
@@ -515,12 +561,12 @@ internal class BetterPlayer(
         activityName: String
     ) {
         val mediaDescriptionAdapter: MediaDescriptionAdapter = object : MediaDescriptionAdapter {
-            override fun getCurrentContentTitle(player: Player): String {
+            override fun getCurrentContentTitle(player: com.google.android.exoplayer2.Player): String {
                 return title
             }
 
             @SuppressLint("UnspecifiedImmutableFlag")
-            override fun createCurrentContentIntent(player: Player): PendingIntent? {
+            override fun createCurrentContentIntent(player: com.google.android.exoplayer2.Player): PendingIntent? {
                 val packageName = context.applicationContext.packageName
                 val notificationIntent = Intent().apply {
                     setClassName(packageName, "$packageName.$activityName")
@@ -531,12 +577,12 @@ internal class BetterPlayer(
                 )
             }
 
-            override fun getCurrentContentText(player: Player): String? {
+            override fun getCurrentContentText(player: com.google.android.exoplayer2.Player): String? {
                 return author
             }
 
             override fun getCurrentLargeIcon(
-                player: Player,
+                player: com.google.android.exoplayer2.Player,
                 callback: BitmapCallback
             ): Bitmap? {
                 if (imageUrl == null) return null
@@ -625,16 +671,16 @@ internal class BetterPlayer(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             refreshHandler = Handler(Looper.getMainLooper())
             refreshRunnable = Runnable {
-                val playbackState: PlaybackStateCompat =
+                val playbackState: android.support.v4.media.session.PlaybackStateCompat =
                     if (exoPlayer?.isPlaying == true) {
-                        PlaybackStateCompat.Builder()
-                            .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
-                            .setState(PlaybackStateCompat.STATE_PLAYING, position, 1.0f)
+                        android.support.v4.media.session.PlaybackStateCompat.Builder()
+                            .setActions(android.support.v4.media.session.PlaybackStateCompat.ACTION_SEEK_TO)
+                            .setState(android.support.v4.media.session.PlaybackStateCompat.STATE_PLAYING, position, 1.0f)
                             .build()
                     } else {
-                        PlaybackStateCompat.Builder()
-                            .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
-                            .setState(PlaybackStateCompat.STATE_PAUSED, position, 1.0f)
+                        android.support.v4.media.session.PlaybackStateCompat.Builder()
+                            .setActions(android.support.v4.media.session.PlaybackStateCompat.ACTION_SEEK_TO)
+                            .setState(android.support.v4.media.session.PlaybackStateCompat.STATE_PAUSED, position, 1.0f)
                             .build()
                     }
                 mediaSession?.setPlaybackState(playbackState)
@@ -644,28 +690,24 @@ internal class BetterPlayer(
         }
 
         // Keep the listener here, but DO NOT emit events to Dart from this one.
-        exoPlayerEventListener = object : Player.Listener {
+        exoPlayerEventListener = object : com.google.android.exoplayer2.Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 // Update metadata for notification / media session
                 mediaSession?.setMetadata(
-                    MediaMetadataCompat.Builder()
-                        .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, getDuration())
+                    android.support.v4.media.MediaMetadataCompat.Builder()
+                        .putLong(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_DURATION, getDuration())
                         .build()
                 )
 
                 // ABR stabilization only (no eventSink calls here)
                 when (playbackState) {
-                    Player.STATE_BUFFERING -> {
-                        // Temporarily cap bitrate to recover faster
-                        val fastCap = if (lastBandwidthEstimateBps > 0)
-                            max(300_000, (lastBandwidthEstimateBps * 7 / 10).toInt())
-                        else
-                            900_000
-                        applyBitrateCap(fastCap)
+                    com.google.android.exoplayer2.Player.STATE_BUFFERING -> {
+                        // Temporarily cap near the current track to recover faster and keep cache useful
+                        capToCurrentTrackPlus()
                     }
-                    Player.STATE_READY -> {
-                        // Lift the cap shortly after we become READY again
-                        scheduleCapLift()
+                    com.google.android.exoplayer2.Player.STATE_READY -> {
+                        // Lift the cap a little after we become READY again
+                        scheduleCapLift(5_000L)
                     }
                     else -> { /* no-op */ }
                 }
@@ -698,15 +740,14 @@ internal class BetterPlayer(
         cacheKey: String?,
         context: Context
     ): MediaSource {
-        val type: Int
-        if (formatHint == null) {
+        val type: Int = if (formatHint == null) {
             var lastPathSegment = uri.lastPathSegment
             if (lastPathSegment == null) {
                 lastPathSegment = ""
             }
-            type = Util.inferContentType(lastPathSegment)
+            Util.inferContentType(lastPathSegment)
         } else {
-            type = when (formatHint) {
+            when (formatHint) {
                 FORMAT_SS -> C.TYPE_SS
                 FORMAT_DASH -> C.TYPE_DASH
                 FORMAT_HLS -> C.TYPE_HLS
@@ -714,7 +755,8 @@ internal class BetterPlayer(
                 else -> -1
             }
         }
-        val mediaItemBuilder = MediaItem.Builder()
+
+        val mediaItemBuilder = com.google.android.exoplayer2.MediaItem.Builder()
         mediaItemBuilder.setUri(uri)
         if (cacheKey != null && cacheKey.isNotEmpty()) {
             mediaItemBuilder.setCustomCacheKey(cacheKey)
@@ -724,6 +766,7 @@ internal class BetterPlayer(
         drmSessionManager?.let { drmSessionManager ->
             drmSessionManagerProvider = DrmSessionManagerProvider { drmSessionManager }
         }
+
         return when (type) {
             C.TYPE_SS -> SsMediaSource.Factory(
                 DefaultSsChunkSource.Factory(mediaDataSourceFactory),
@@ -731,24 +774,28 @@ internal class BetterPlayer(
             )
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
+
             C.TYPE_DASH -> DashMediaSource.Factory(
                 DefaultDashChunkSource.Factory(mediaDataSourceFactory),
                 DefaultDataSource.Factory(context, mediaDataSourceFactory)
             )
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
+
             C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)
-                // Faster start for HLS VOD: lets Exo prepare from the master/variant
-                // playlist without downloading a chunk first (where possible).
+                // Faster start for HLS VOD: lets Exo prepare from the master/variant playlist.
                 .setAllowChunklessPreparation(true)
+                .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(2)) // softer retry policy
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
+
             C.TYPE_OTHER -> ProgressiveMediaSource.Factory(
                 mediaDataSourceFactory,
                 DefaultExtractorsFactory()
             )
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
+
             else -> {
                 throw IllegalStateException("Unsupported type: $type")
             }
@@ -777,16 +824,16 @@ internal class BetterPlayer(
         setAudioAttributes(exoPlayer, true)
 
         // This listener is the ONLY place that emits playback events to Dart.
-        exoPlayer?.addListener(object : Player.Listener {
+        exoPlayer?.addListener(object : com.google.android.exoplayer2.Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
-                    Player.STATE_BUFFERING -> {
+                    com.google.android.exoplayer2.Player.STATE_BUFFERING -> {
                         sendBufferingUpdate(true)
                         val event: MutableMap<String, Any> = HashMap()
                         event["event"] = "bufferingStart"
                         eventSink.success(event)
                     }
-                    Player.STATE_READY -> {
+                    com.google.android.exoplayer2.Player.STATE_READY -> {
                         if (!isInitialized) {
                             isInitialized = true
                             sendInitialized()
@@ -795,13 +842,13 @@ internal class BetterPlayer(
                         event["event"] = "bufferingEnd"
                         eventSink.success(event)
                     }
-                    Player.STATE_ENDED -> {
+                    com.google.android.exoplayer2.Player.STATE_ENDED -> {
                         val event: MutableMap<String, Any?> = HashMap()
                         event["event"] = "completed"
                         event["key"] = key
                         eventSink.success(event)
                     }
-                    Player.STATE_IDLE -> { /* no-op */ }
+                    com.google.android.exoplayer2.Player.STATE_IDLE -> { /* no-op */ }
                 }
             }
 
@@ -814,7 +861,6 @@ internal class BetterPlayer(
         reply["textureId"] = textureEntry.id()
         result.success(reply)
     }
-
 
     fun sendBufferingUpdate(isFromBufferingStart: Boolean) {
         val bufferedPosition = exoPlayer?.bufferedPosition ?: 0L
@@ -854,12 +900,11 @@ internal class BetterPlayer(
     }
 
     fun setLooping(value: Boolean) {
-        exoPlayer?.repeatMode = if (value) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+        exoPlayer?.repeatMode = if (value) com.google.android.exoplayer2.Player.REPEAT_MODE_ALL else com.google.android.exoplayer2.Player.REPEAT_MODE_OFF
     }
 
     fun setVolume(value: Double) {
-        val bracketedValue = max(0.0, min(1.0, value))
-            .toFloat()
+        val bracketedValue = max(0.0, min(1.0, value)).toFloat()
         exoPlayer?.volume = bracketedValue
     }
 
@@ -885,8 +930,6 @@ internal class BetterPlayer(
     }
 
     fun seekTo(location: Int) {
-        applyBitrateCap(1_000_000)  // ~1 Mbps during the transition
-        scheduleCapLift()
         exoPlayer?.seekTo(location.toLong())
     }
 
@@ -939,7 +982,7 @@ internal class BetterPlayer(
      * @return - configured MediaSession instance
      */
     @SuppressLint("InlinedApi")
-    fun setupMediaSession(context: Context?): MediaSessionCompat? {
+    fun setupMediaSession(context: Context?): android.support.v4.media.session.MediaSessionCompat? {
         mediaSession?.release()
         context?.let {
 
@@ -949,8 +992,8 @@ internal class BetterPlayer(
                 0, mediaButtonIntent,
                 PendingIntent.FLAG_IMMUTABLE
             )
-            val mediaSession = MediaSessionCompat(context, TAG, null, pendingIntent)
-            mediaSession.setCallback(object : MediaSessionCompat.Callback() {
+            val mediaSession = android.support.v4.media.session.MediaSessionCompat(context, TAG, null, pendingIntent)
+            mediaSession.setCallback(object : android.support.v4.media.session.MediaSessionCompat.Callback() {
                 override fun onSeekTo(pos: Long) {
                     sendSeekToEvent(pos)
                     super.onSeekTo(pos)
