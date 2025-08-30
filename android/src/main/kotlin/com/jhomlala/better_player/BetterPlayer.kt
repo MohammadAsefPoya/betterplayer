@@ -13,6 +13,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import com.google.android.exoplayer2.source.LoadEventInfo
+import com.google.android.exoplayer2.source.MediaLoadData
+import java.io.IOException
 import com.jhomlala.better_player.DataSourceUtils.getUserAgent
 import com.jhomlala.better_player.DataSourceUtils.isHTTP
 import io.flutter.plugin.common.EventChannel
@@ -106,6 +110,15 @@ internal class BetterPlayer(
     private val customDefaultLoadControl: CustomDefaultLoadControl =
         customDefaultLoadControl ?: CustomDefaultLoadControl()
     private var lastSendBufferedPosition = 0L
+    private var lastBandwidthEstimateBps: Long = -1
+    private var recentLoadErrors: Int = 0
+    private var errorWindowStartMs: Long = 0
+    private val errorWindowMs = 8_000L
+    private val errorThreshold = 2
+    private val floorCapWhenErrorsBps = 600_000 
+
+    // Schedules lifting of temporary caps
+    private var capLiftHandler: Handler? = null
 
     // App context to access cache safely
     private val appContext: Context = context.applicationContext
@@ -136,6 +149,13 @@ internal class BetterPlayer(
         }
     }
 
+    private fun resetErrorWindowIfNeeded(now: Long) {
+        if (now - errorWindowStartMs > errorWindowMs) {
+            errorWindowStartMs = now
+            recentLoadErrors = 0
+        }
+    }
+
     init {
         // Build LoadControl using Dart-side buffer values
         val loadBuilder = DefaultLoadControl.Builder()
@@ -153,7 +173,12 @@ internal class BetterPlayer(
         // Track selector with ABR
         trackSelector = DefaultTrackSelector(
             context,
-            AdaptiveTrackSelection.Factory()
+            AdaptiveTrackSelection.Factory(
+                /* minDurationForQualityIncreaseMs = */ 10_000,  // need ≥10s buffered before upswitch
+                /* maxDurationForQualityDecreaseMs = */ 3_000,   // quick to downswitch when needed
+                /* minDurationToRetainAfterDiscardMs = */ 25_000,// keep ≥25s; avoids throwing away buffer
+                /* bandwidthFraction = */ 0.75f                  // conservative fraction of est. bandwidth
+            )
         )
 
         // Build ExoPlayer
@@ -183,6 +208,42 @@ internal class BetterPlayer(
                 event["height"] = videoSize.height
                 eventSink.success(event)
             }
+
+            override fun onBandwidthEstimate(
+                eventTime: AnalyticsListener.EventTime,
+                totalLoadTimeMs: Int,
+                totalBytesLoaded: Long,
+                bitrateEstimate: Long
+            ) {
+                lastBandwidthEstimateBps = bitrateEstimate
+                // If estimate is low, temporarily cap below it to stabilize.
+                if (bitrateEstimate > 0 && bitrateEstimate < 1_200_000) { // < ~1.2 Mbps
+                    val safeCap = (bitrateEstimate * 7 / 10).toInt().coerceAtLeast(300_000)
+                    applyBitrateCap(safeCap)
+                    scheduleCapLift() // will lift automatically after a short READY period
+                }
+            }
+
+            override fun onLoadError(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData,
+                error: IOException,
+                wasCanceled: Boolean
+            ) {
+                val now = SystemClock.elapsedRealtime()
+                resetErrorWindowIfNeeded(now)
+                recentLoadErrors++
+
+                if (recentLoadErrors >= errorThreshold) {
+                    // We’re struggling: clamp harder for a bit.
+                    applyBitrateCap(floorCapWhenErrorsBps)
+                    // Hold cap slightly longer (override the usual 2.5s if you want):
+                    capLiftHandler?.removeCallbacksAndMessages(null)
+                    capLiftHandler = Handler(Looper.getMainLooper())
+                    capLiftHandler?.postDelayed({ liftBitrateCap() }, 5_000L)
+                }
+            }
         })
     }
 
@@ -209,6 +270,30 @@ internal class BetterPlayer(
             else         -> 0L
         }
         return ramAheadMs + kotlin.math.max(0L, diskAheadMs)
+    }
+
+    private fun applyBitrateCap(capBps: Int) {
+        val cap = capBps.coerceAtLeast(128_000)
+        val newParams = trackSelector.parameters.buildUpon()
+            .setForceHighestSupportedBitrate(false)
+            .setMaxVideoBitrate(cap)
+            .build()
+        trackSelector.parameters = newParams
+        Log.d(TAG, "ABR cap applied: $cap Bps")
+    }
+
+    private fun liftBitrateCap() {
+        val newParams = trackSelector.parameters.buildUpon()
+            .setMaxVideoBitrate(Int.MAX_VALUE)
+            .build()
+        trackSelector.parameters = newParams
+        Log.d(TAG, "ABR cap lifted")
+    }
+
+    private fun scheduleCapLift(delayMs: Long = 2_500L) {
+        capLiftHandler?.removeCallbacksAndMessages(null)
+        capLiftHandler = Handler(Looper.getMainLooper())
+        capLiftHandler?.postDelayed({ liftBitrateCap() }, delayMs)
     }
 
     // Progressive: contiguous cached bytes ahead mapped to time.
@@ -412,6 +497,8 @@ internal class BetterPlayer(
             exoPlayer?.setMediaSource(mediaSource)
         }
         exoPlayer?.prepare()
+        applyBitrateCap(1_200_000)
+        scheduleCapLift()
 
         // Start offline playable ticker now
         startOfflineTicker()
@@ -420,8 +507,11 @@ internal class BetterPlayer(
     }
 
     fun setupPlayerNotification(
-        context: Context, title: String, author: String?,
-        imageUrl: String?, notificationChannelName: String?,
+        context: Context,
+        title: String,
+        author: String?,
+        imageUrl: String?,
+        notificationChannelName: String?,
         activityName: String
     ) {
         val mediaDescriptionAdapter: MediaDescriptionAdapter = object : MediaDescriptionAdapter {
@@ -432,17 +522,12 @@ internal class BetterPlayer(
             @SuppressLint("UnspecifiedImmutableFlag")
             override fun createCurrentContentIntent(player: Player): PendingIntent? {
                 val packageName = context.applicationContext.packageName
-                val notificationIntent = Intent()
-                notificationIntent.setClassName(
-                    packageName,
-                    "$packageName.$activityName"
-                )
-                notificationIntent.flags = (Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                val notificationIntent = Intent().apply {
+                    setClassName(packageName, "$packageName.$activityName")
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
                 return PendingIntent.getActivity(
-                    context, 0,
-                    notificationIntent,
-                    PendingIntent.FLAG_IMMUTABLE
+                    context, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE
                 )
             }
 
@@ -454,12 +539,9 @@ internal class BetterPlayer(
                 player: Player,
                 callback: BitmapCallback
             ): Bitmap? {
-                if (imageUrl == null) {
-                    return null
-                }
-                if (bitmap != null) {
-                    return bitmap
-                }
+                if (imageUrl == null) return null
+                if (bitmap != null) return bitmap
+
                 val imageWorkRequest = OneTimeWorkRequest.Builder(ImageWorker::class.java)
                     .addTag(imageUrl)
                     .setInputData(
@@ -468,7 +550,9 @@ internal class BetterPlayer(
                             .build()
                     )
                     .build()
+
                 workManager.enqueue(imageWorkRequest)
+
                 val workInfoObserver = Observer { workInfo: WorkInfo? ->
                     try {
                         if (workInfo != null) {
@@ -478,14 +562,14 @@ internal class BetterPlayer(
                                 val filePath =
                                     outputData.getString(BetterPlayerPlugin.FILE_PATH_PARAMETER)
                                 bitmap = BitmapFactory.decodeFile(filePath)
-                                bitmap?.let { bmp ->
-                                    callback.onBitmap(bmp)
-                                }
+                                bitmap?.let { bmp -> callback.onBitmap(bmp) }
                             }
-                            if (state == WorkInfo.State.SUCCEEDED || state == WorkInfo.State.CANCELLED || state == WorkInfo.State.FAILED) {
+                            if (state == WorkInfo.State.SUCCEEDED ||
+                                state == WorkInfo.State.CANCELLED ||
+                                state == WorkInfo.State.FAILED
+                            ) {
                                 val uuid = imageWorkRequest.id
-                                val observer = workerObserverMap.remove(uuid)
-                                if (observer != null) {
+                                workerObserverMap.remove(uuid)?.let { observer ->
                                     workManager.getWorkInfoByIdLiveData(uuid)
                                         .removeObserver(observer)
                                 }
@@ -495,80 +579,100 @@ internal class BetterPlayer(
                         Log.e(TAG, "Image select error: $exception")
                     }
                 }
+
                 val workerUuid = imageWorkRequest.id
                 workManager.getWorkInfoByIdLiveData(workerUuid)
                     .observeForever(workInfoObserver)
                 workerObserverMap[workerUuid] = workInfoObserver
+
                 return null
             }
         }
+
         var playerNotificationChannelName = notificationChannelName
-        if (notificationChannelName == null) {
+        if (playerNotificationChannelName == null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val importance = NotificationManager.IMPORTANCE_LOW
                 val channel = NotificationChannel(
                     DEFAULT_NOTIFICATION_CHANNEL,
-                    DEFAULT_NOTIFICATION_CHANNEL, importance
-                )
-                channel.description = DEFAULT_NOTIFICATION_CHANNEL
-                val notificationManager = context.getSystemService(
-                    NotificationManager::class.java
-                )
+                    DEFAULT_NOTIFICATION_CHANNEL,
+                    importance
+                ).apply { description = DEFAULT_NOTIFICATION_CHANNEL }
+
+                val notificationManager =
+                    context.getSystemService(NotificationManager::class.java)
                 notificationManager.createNotificationChannel(channel)
                 playerNotificationChannelName = DEFAULT_NOTIFICATION_CHANNEL
             }
         }
 
         playerNotificationManager = PlayerNotificationManager.Builder(
-            context, NOTIFICATION_ID,
+            context,
+            NOTIFICATION_ID,
             playerNotificationChannelName!!
         ).setMediaDescriptionAdapter(mediaDescriptionAdapter).build()
 
         playerNotificationManager?.apply {
-
             exoPlayer?.let { exo ->
                 setPlayer(ForwardingPlayer(exo))
                 setUseNextAction(false)
                 setUsePreviousAction(false)
                 setUseStopAction(false)
             }
-
-            setupMediaSession(context)?.let {
-                setMediaSessionToken(it.sessionToken)
-            }
+            setupMediaSession(context)?.let { setMediaSessionToken(it.sessionToken) }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             refreshHandler = Handler(Looper.getMainLooper())
             refreshRunnable = Runnable {
-                val playbackState: PlaybackStateCompat = if (exoPlayer?.isPlaying == true) {
-                    PlaybackStateCompat.Builder()
-                        .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
-                        .setState(PlaybackStateCompat.STATE_PLAYING, position, 1.0f)
-                        .build()
-                } else {
-                    PlaybackStateCompat.Builder()
-                        .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
-                        .setState(PlaybackStateCompat.STATE_PAUSED, position, 1.0f)
-                        .build()
-                }
+                val playbackState: PlaybackStateCompat =
+                    if (exoPlayer?.isPlaying == true) {
+                        PlaybackStateCompat.Builder()
+                            .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
+                            .setState(PlaybackStateCompat.STATE_PLAYING, position, 1.0f)
+                            .build()
+                    } else {
+                        PlaybackStateCompat.Builder()
+                            .setActions(PlaybackStateCompat.ACTION_SEEK_TO)
+                            .setState(PlaybackStateCompat.STATE_PAUSED, position, 1.0f)
+                            .build()
+                    }
                 mediaSession?.setPlaybackState(playbackState)
                 refreshHandler?.postDelayed(refreshRunnable!!, 1000)
             }
             refreshHandler?.postDelayed(refreshRunnable!!, 0)
         }
+
+        // Keep the listener here, but DO NOT emit events to Dart from this one.
         exoPlayerEventListener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
+                // Update metadata for notification / media session
                 mediaSession?.setMetadata(
                     MediaMetadataCompat.Builder()
                         .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, getDuration())
                         .build()
                 )
+
+                // ABR stabilization only (no eventSink calls here)
+                when (playbackState) {
+                    Player.STATE_BUFFERING -> {
+                        // Temporarily cap bitrate to recover faster
+                        val fastCap = if (lastBandwidthEstimateBps > 0)
+                            max(300_000, (lastBandwidthEstimateBps * 7 / 10).toInt())
+                        else
+                            900_000
+                        applyBitrateCap(fastCap)
+                    }
+                    Player.STATE_READY -> {
+                        // Lift the cap shortly after we become READY again
+                        scheduleCapLift()
+                    }
+                    else -> { /* no-op */ }
+                }
             }
         }
-        exoPlayerEventListener?.let { exoPlayerEventListener ->
-            exoPlayer?.addListener(exoPlayerEventListener)
-        }
+        exoPlayerEventListener?.let { exoPlayer?.addListener(it) }
+
         exoPlayer?.seekTo(0)
     }
 
@@ -652,7 +756,9 @@ internal class BetterPlayer(
     }
 
     private fun setupVideoPlayer(
-        eventChannel: EventChannel, textureEntry: SurfaceTextureEntry, result: MethodChannel.Result
+        eventChannel: EventChannel,
+        textureEntry: SurfaceTextureEntry,
+        result: MethodChannel.Result
     ) {
         eventChannel.setStreamHandler(
             object : EventChannel.StreamHandler {
@@ -663,10 +769,14 @@ internal class BetterPlayer(
                 override fun onCancel(o: Any?) {
                     eventSink.setDelegate(null)
                 }
-            })
+            }
+        )
+
         surface = Surface(textureEntry.surfaceTexture())
         exoPlayer?.setVideoSurface(surface)
         setAudioAttributes(exoPlayer, true)
+
+        // This listener is the ONLY place that emits playback events to Dart.
         exoPlayer?.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
@@ -691,9 +801,7 @@ internal class BetterPlayer(
                         event["key"] = key
                         eventSink.success(event)
                     }
-                    Player.STATE_IDLE -> {
-                        //no-op
-                    }
+                    Player.STATE_IDLE -> { /* no-op */ }
                 }
             }
 
@@ -701,10 +809,12 @@ internal class BetterPlayer(
                 eventSink.error("VideoError", "Video player had error $error", "")
             }
         })
+
         val reply: MutableMap<String, Any> = HashMap()
         reply["textureId"] = textureEntry.id()
         result.success(reply)
     }
+
 
     fun sendBufferingUpdate(isFromBufferingStart: Boolean) {
         val bufferedPosition = exoPlayer?.bufferedPosition ?: 0L
@@ -775,6 +885,8 @@ internal class BetterPlayer(
     }
 
     fun seekTo(location: Int) {
+        applyBitrateCap(1_000_000)  // ~1 Mbps during the transition
+        scheduleCapLift()
         exoPlayer?.seekTo(location.toLong())
     }
 
@@ -950,6 +1062,8 @@ internal class BetterPlayer(
     }
 
     fun dispose() {
+        capLiftHandler?.removeCallbacksAndMessages(null)
+        capLiftHandler = null
         disposeMediaSession()
         disposeRemoteNotifications()
         stopOfflineTicker() // stop Step 1 ticker

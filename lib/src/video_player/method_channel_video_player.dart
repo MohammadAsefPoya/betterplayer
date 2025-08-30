@@ -1,5 +1,5 @@
-// Copyright 2017 The Chromium Authors. All rights
-// reserved.
+// Copyright 2017 The Chromium Authors.
+// All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -421,10 +421,18 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             size: Size(w.toDouble(), h.toDouble()),
           );
 
-        // NEW: time-based cache update (ms buffered ahead)
+        // UPDATED: time-based cache update (map new Android fields to cachedDurationMs).
+        // We prefer diskAheadMs (disk-only), fallback to playableOfflineMs (RAM+disk),
+        // then to legacy cachedDurationMs if present.
         case 'cacheUpdate':
-          final int? cachedDurationMs =
+          final int? diskAheadMs = (map['diskAheadMs'] as num?)?.toInt();
+          final int? playableOfflineMs =
+              (map['playableOfflineMs'] as num?)?.toInt();
+          final int? legacyCachedMs =
               (map['cachedDurationMs'] as num?)?.toInt();
+          final int? cachedDurationMs =
+              diskAheadMs ?? playableOfflineMs ?? legacyCachedMs;
+
           return VideoEvent(
             eventType: VideoEventType.cacheUpdate,
             key: key,
