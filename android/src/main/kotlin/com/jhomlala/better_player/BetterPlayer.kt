@@ -54,6 +54,7 @@ import com.google.android.exoplayer2.source.hls.HlsMediaSource
 import com.google.android.exoplayer2.source.smoothstreaming.DefaultSsChunkSource
 import com.google.android.exoplayer2.source.smoothstreaming.SsMediaSource
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
+import com.google.android.exoplayer2.trackselection.ExoTrackSelection
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
 import com.google.android.exoplayer2.ui.PlayerNotificationManager
 import com.google.android.exoplayer2.ui.PlayerNotificationManager.BitmapCallback
@@ -178,16 +179,16 @@ internal class BetterPlayer(
             .setPrioritizeTimeOverSizeThresholds(true) // time-based buffering behavior
         loadControl = loadBuilder.build()
 
-        // --- TrackSelector with KEEP-BUFFER ABR policy for VIDEO
-        trackSelector = DefaultTrackSelector(
-            context,
+        // --- TrackSelector with KEEP-BUFFER ABR policy for VIDEO (Exo 2.17 API)
+        val keepBufferFactory: ExoTrackSelection.Factory =
             KeepBufferAdaptiveTrackSelection.Factory(
-                /* minDurationForQualityIncreaseMs = */ 10_000L,
-                /* maxDurationForQualityDecreaseMs = */ 3_000L,
-                /* minDurationToRetainAfterDiscardMs = */ 60_000L, // very large => don't discard
+                /* minDurationForQualityIncreaseMs = */ 10_000,
+                /* maxDurationForQualityDecreaseMs = */ 3_000,
+                /* minDurationToRetainAfterDiscardMs = */ 60_000,
                 /* bandwidthFraction = */ 0.75f
             )
-        )
+
+        trackSelector = DefaultTrackSelector(context, keepBufferFactory)
 
         // --- ExoPlayer
         exoPlayer = ExoPlayer.Builder(context)
@@ -224,7 +225,7 @@ internal class BetterPlayer(
                 bitrateEstimate: Long
             ) {
                 lastBandwidthEstimateBps = bitrateEstimate
-                // Apply a temporary cap to stabilize, but we *never* discard buffered chunks
+                // Apply a temporary cap to stabilize; KEEP-BUFFER ensures no discards.
                 if (bitrateEstimate > 0 && bitrateEstimate < 1_200_000) {
                     val safeCap = (bitrateEstimate * 7 / 10).toInt().coerceAtLeast(300_000)
                     applyBitrateCap(safeCap)
@@ -256,9 +257,8 @@ internal class BetterPlayer(
 
     private fun playerCache(): Cache? {
         if (!useCacheEnabledForThisSource) return null
-        // Obtain existing cache instance (SimpleCache implements Cache)
-        val sc: SimpleCache? = BetterPlayerCache.createCache(appContext, 1L)
-        return sc
+        // Return as Cache? (SimpleCache implements Cache)
+        return BetterPlayerCache.createCache(appContext, 1L) as Cache?
     }
 
     private fun computePlayableOfflineMs(): Long {
@@ -512,7 +512,7 @@ internal class BetterPlayer(
         }
         exoPlayer?.prepare()
 
-        // Small initial cap to reduce startup stalls; KEEP-BUFFER selection will avoid discards
+        // Small initial cap to reduce startup stalls; KEEP-BUFFER selection avoids discards
         applyBitrateCap(1_200_000)
         scheduleCapLift()
 
@@ -949,12 +949,8 @@ internal class BetterPlayer(
                     val group = trackGroupArray[groupIndex]
                     for (groupElementIndex in 0 until group.length) {
                         val format = group.getFormat(groupElementIndex)
-                        if (format.label == null) {
-                            hasElementWithoutLabel = true
-                        }
-                        if (format.id != null && format.id == "1/15") {
-                            hasStrangeAudioTrack = true
-                        }
+                        if (format.label == null) hasElementWithoutLabel = true
+                        if (format.id != null && format.id == "1/15") hasStrangeAudioTrack = true
                     }
                 }
                 for (groupIndex in 0 until trackGroupArray.length) {
@@ -962,16 +958,13 @@ internal class BetterPlayer(
                     for (groupElementIndex in 0 until group.length) {
                         val label = group.getFormat(groupElementIndex).label
                         if (name == label && index == groupIndex) {
-                            setAudioTrack(rendererIndex, groupIndex, groupElementIndex)
-                            return
+                            setAudioTrack(rendererIndex, groupIndex, groupElementIndex); return
                         }
                         if (!hasStrangeAudioTrack && hasElementWithoutLabel && index == groupIndex) {
-                            setAudioTrack(rendererIndex, groupIndex, groupElementIndex)
-                            return
+                            setAudioTrack(rendererIndex, groupIndex, groupElementIndex); return
                         }
                         if (hasStrangeAudioTrack && name == label) {
-                            setAudioTrack(rendererIndex, groupIndex, groupElementIndex)
-                            return
+                            setAudioTrack(rendererIndex, groupIndex, groupElementIndex); return
                         }
                     }
                 }
