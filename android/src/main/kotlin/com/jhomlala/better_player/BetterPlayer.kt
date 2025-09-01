@@ -58,6 +58,7 @@ import com.google.android.exoplayer2.upstream.DataSource
 import com.google.android.exoplayer2.upstream.DataSpec
 import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
 import com.google.android.exoplayer2.upstream.DefaultDataSource
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSource   // <-- ADDED
 import com.google.android.exoplayer2.upstream.cache.Cache
 import com.google.android.exoplayer2.upstream.cache.CacheKeyFactory
 import com.google.android.exoplayer2.upstream.cache.ContentMetadata
@@ -412,6 +413,17 @@ internal class BetterPlayer(
         val uri = Uri.parse(dataSource)
         val userAgent = DataSourceUtils.getUserAgent(headers)
 
+        // Decide type (prefer explicit formatHint; else infer from uri)
+        val inferredTypeFromHint = when (formatHint) {
+            FORMAT_HLS -> C.TYPE_HLS
+            FORMAT_DASH -> C.TYPE_DASH
+            FORMAT_SS -> C.TYPE_SS
+            FORMAT_OTHER -> C.TYPE_OTHER
+            else -> C.TYPE_OTHER
+        }
+        val inferredTypeFromUri = Util.inferContentType(uri)
+        val isHlsType = (inferredTypeFromHint == C.TYPE_HLS) || (inferredTypeFromUri == C.TYPE_HLS)
+
         // --- OkHttp client (shared) ---
         val okClient = OkHttpClient.Builder()
             .connectionPool(ConnectionPool(8, 60, java.util.concurrent.TimeUnit.SECONDS))
@@ -466,13 +478,26 @@ internal class BetterPlayer(
             drmSessionManager = null
         }
 
-        // ---------------- Data source (OkHttp) ----------------
+        // ---------------- Data source (choose per type) ----------------
         val mediaDataSourceFactory: DataSource.Factory = if (DataSourceUtils.isHTTP(uri)) {
-            var httpFactory = OkHttpDataSource.Factory(okClient)
-                .setUserAgent(userAgent)
-            headers?.let { httpFactory = httpFactory.setDefaultRequestProperties(it) }
+            // HLS -> DefaultHttpDataSource (more compatible with CDNs/redirects)
+            // Others -> OkHttpDataSource (as before)
+            var upstream: DataSource.Factory =
+                if (isHlsType) {
+                    var http = DefaultHttpDataSource.Factory()
+                        .setUserAgent(userAgent)
+                        .setAllowCrossProtocolRedirects(true)
+                        .setConnectTimeoutMs(8_000)
+                        .setReadTimeoutMs(15_000)
+                    headers?.let { http = http.setDefaultRequestProperties(it) }
+                    http
+                } else {
+                    var http = OkHttpDataSource.Factory(okClient)
+                        .setUserAgent(userAgent)
+                    headers?.let { http = http.setDefaultRequestProperties(it) }
+                    http
+                }
 
-            var upstream: DataSource.Factory = httpFactory
             if (useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
                 upstream = CacheDataSourceFactory(
                     context,
@@ -718,7 +743,7 @@ internal class BetterPlayer(
             ).setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
             C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)
-                .setAllowChunklessPreparation(true)
+                .setAllowChunklessPreparation(false)   // <-- CHANGED: safer for HLS/CDNs
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
             C.TYPE_OTHER -> ProgressiveMediaSource.Factory(
