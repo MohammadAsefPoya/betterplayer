@@ -864,16 +864,10 @@ internal class BetterPlayer(
         bitmap = null
     }
 
-    fun disposeMediaSession() {
-        mediaSession?.release()
-        mediaSession = null
-    }
-
-
     fun dispose() {
         capLiftHandler?.removeCallbacksAndMessages(null)
         capLiftHandler = null
-        disposeMediaSession()  // Clean up media session
+        disposeMediaSession()  // Call only once
         disposeRemoteNotifications()  // Clean up notifications
         stopOfflineTicker()  // Clean up offline ticker
 
