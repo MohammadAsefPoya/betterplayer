@@ -58,7 +58,8 @@ import com.google.android.exoplayer2.upstream.DataSource
 import com.google.android.exoplayer2.upstream.DataSpec
 import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
 import com.google.android.exoplayer2.upstream.DefaultDataSource
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSource   // <-- ADDED
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
+import com.google.android.exoplayer2.upstream.HttpDataSource
 import com.google.android.exoplayer2.upstream.cache.Cache
 import com.google.android.exoplayer2.upstream.cache.CacheKeyFactory
 import com.google.android.exoplayer2.upstream.cache.ContentMetadata
@@ -236,6 +237,11 @@ internal class BetterPlayer(
                 error: IOException,
                 wasCanceled: Boolean
             ) {
+                // --- Instrument exact failing URI + HTTP code ---
+                val uriStr = try { loadEventInfo.dataSpec.uri.toString() } catch (_: Exception) { "?" }
+                val httpCode = (error as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                Log.e(TAG, "onLoadError: $uriStr, httpCode=$httpCode, cause=${error.javaClass.simpleName}")
+
                 val now = SystemClock.elapsedRealtime()
                 resetErrorWindowIfNeeded(now)
                 recentLoadErrors++
@@ -478,24 +484,35 @@ internal class BetterPlayer(
             drmSessionManager = null
         }
 
-        // ---------------- Data source (choose per type) ----------------
+        // ---------------- Data source (HLS gets a fallback wrapper) ----------------
         val mediaDataSourceFactory: DataSource.Factory = if (DataSourceUtils.isHTTP(uri)) {
-            // HLS -> DefaultHttpDataSource (more compatible with CDNs/redirects)
-            // Others -> OkHttpDataSource (as before)
+
+            // Build both HTTP stacks with same headers/U-A
+            var defaultHttp = DefaultHttpDataSource.Factory()
+                .setUserAgent(userAgent)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(8_000)
+                .setReadTimeoutMs(15_000)
+
+            var okHttp = OkHttpDataSource.Factory(okClient)
+                .setUserAgent(userAgent)
+
+            headers?.let {
+                defaultHttp = defaultHttp.setDefaultRequestProperties(it)
+                okHttp = okHttp.setDefaultRequestProperties(it)
+            }
+
+            // Choose the upstream factory
             var upstream: DataSource.Factory =
                 if (isHlsType) {
-                    var http = DefaultHttpDataSource.Factory()
-                        .setUserAgent(userAgent)
-                        .setAllowCrossProtocolRedirects(true)
-                        .setConnectTimeoutMs(8_000)
-                        .setReadTimeoutMs(15_000)
-                    headers?.let { http = http.setDefaultRequestProperties(it) }
-                    http
+                    // For HLS, use a fallback factory that tries DefaultHttp, then OkHttp
+                    FallbackHttpDataSourceFactory(
+                        primary = defaultHttp,
+                        secondary = okHttp
+                    )
                 } else {
-                    var http = OkHttpDataSource.Factory(okClient)
-                        .setUserAgent(userAgent)
-                    headers?.let { http = http.setDefaultRequestProperties(it) }
-                    http
+                    // Progressive/DASH/SS: keep your previous OkHttp stack
+                    okHttp
                 }
 
             if (useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
@@ -743,7 +760,7 @@ internal class BetterPlayer(
             ).setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
             C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)
-                .setAllowChunklessPreparation(false)   // <-- CHANGED: safer for HLS/CDNs
+                .setAllowChunklessPreparation(true)   // back to the safer default for wide CDN compatibility
                 .setDrmSessionManagerProvider(drmSessionManagerProvider)
                 .createMediaSource(mediaItem)
             C.TYPE_OTHER -> ProgressiveMediaSource.Factory(
@@ -1080,7 +1097,7 @@ internal class BetterPlayer(
     }
 
     companion object {
-        private const val TAG = "BetterPlayer"
+        internal const val TAG = "BetterPlayer"
         private const val FORMAT_SS = "ss"
         private const val FORMAT_DASH = "dash"
         private const val FORMAT_HLS = "hls"
