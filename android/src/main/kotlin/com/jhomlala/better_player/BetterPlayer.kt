@@ -853,19 +853,40 @@ internal class BetterPlayer(
         setAudioAttributes(exoPlayer, mixWithOthers)
     }
 
+    fun disposeRemoteNotifications() {
+        exoPlayerEventListener?.let { exoPlayer?.removeListener(it) }
+        if (refreshHandler != null) {
+            refreshHandler?.removeCallbacksAndMessages(null)
+            refreshHandler = null
+            refreshRunnable = null
+        }
+        playerNotificationManager?.setPlayer(null)
+        bitmap = null
+    }
+
+    fun disposeMediaSession() {
+        mediaSession?.release()
+        mediaSession = null
+    }
+
+
     fun dispose() {
         capLiftHandler?.removeCallbacksAndMessages(null)
         capLiftHandler = null
-        disposeMediaSession()
-        disposeRemoteNotifications()
-        stopOfflineTicker()
+        disposeMediaSession()  // Clean up media session
+        disposeRemoteNotifications()  // Clean up notifications
+        stopOfflineTicker()  // Clean up offline ticker
+
         if (isInitialized) {
-            exoPlayer?.stop()
+            exoPlayer?.stop()  // Stop playback if active
+            exoPlayer?.release()  // Release the ExoPlayer instance
         }
-        textureEntry.release()
-        eventChannel.setStreamHandler(null)
-        surface?.release()
-        exoPlayer?.release()
+        textureEntry.release()  // Release the texture entry
+        eventChannel.setStreamHandler(null)  // Remove event handler
+        surface?.release()  // Release the surface
+        exoPlayer = null  // Nullify the ExoPlayer instance
+        drmSessionManager?.release()  // Release DRM session manager
+        drmSessionManager = null  // Nullify the DRM session manager
     }
 
     override fun equals(other: Any?): Boolean {
