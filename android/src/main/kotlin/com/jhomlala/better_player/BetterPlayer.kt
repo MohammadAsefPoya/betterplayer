@@ -287,46 +287,46 @@ internal class BetterPlayer(
         val uri = Uri.parse(dataSource)
         val userAgent = DataSourceUtils.getUserAgent(headers)
 
+        // Detect HLS (prefer explicit hint; else infer)
         val inferredTypeFromHint = when (formatHint) {
             FORMAT_HLS -> C.TYPE_HLS
             FORMAT_DASH -> C.TYPE_DASH
-            FORMAT_SS -> C.TYPE_SS
-            FORMAT_OTHER -> C.TYPE_OTHER
-            else -> C.TYPE_OTHER
+            FORMAT_SS   -> C.TYPE_SS
+            FORMAT_OTHER-> C.TYPE_OTHER
+            else        -> C.TYPE_OTHER
         }
         val inferredTypeFromUri = Util.inferContentType(uri)
         val isHlsType = (inferredTypeFromHint == C.TYPE_HLS) || (inferredTypeFromUri == C.TYPE_HLS)
 
-        // --- OkHttp client (shared) ---
-        val okClient = OkHttpClient.Builder()
-            .connectionPool(ConnectionPool(8, 60, java.util.concurrent.TimeUnit.SECONDS))
-            .retryOnConnectionFailure(true)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
-
         // ---------------- DRM (Widevine/ClearKey) ----------------
         if (!licenseUrl.isNullOrEmpty()) {
-            val drmFactory = OkHttpDataSource.Factory(okClient).setUserAgent(userAgent)
-            val httpMediaDrmCallback = HttpMediaDrmCallback(licenseUrl, drmFactory)
+            val httpFactory = OkHttpDataSource.Factory(
+                OkHttpClient.Builder()
+                    .connectionPool(ConnectionPool(8, 60, java.util.concurrent.TimeUnit.SECONDS))
+                    .retryOnConnectionFailure(true)
+                    .followRedirects(true)
+                    .followSslRedirects(true)
+                    .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+            ).setUserAgent(userAgent)
+
+            val httpMediaDrmCallback = HttpMediaDrmCallback(licenseUrl, httpFactory)
             drmHeaders?.forEach { (k, v) -> httpMediaDrmCallback.setKeyRequestProperty(k, v) }
 
             if (Util.SDK_INT < 18) {
                 Log.e(TAG, "Protected content not supported on API levels below 18")
                 drmSessionManager = null
             } else {
-                val drmSchemeUuid = Util.getDrmUuid("widevine")
-                if (drmSchemeUuid != null) {
+                Util.getDrmUuid("widevine")?.let { drmSchemeUuid ->
                     drmSessionManager = DefaultDrmSessionManager.Builder()
-                        .setUuidAndExoMediaDrmProvider(drmSchemeUuid) { uuid: UUID? ->
+                        .setUuidAndExoMediaDrmProvider(drmSchemeUuid) { uuid ->
                             try {
-                                val mediaDrm = FrameworkMediaDrm.newInstance(uuid!!)
-                                mediaDrm.setPropertyString("securityLevel", "L3")
-                                mediaDrm
-                            } catch (e: UnsupportedDrmException) {
+                                FrameworkMediaDrm.newInstance(uuid!!).apply {
+                                    setPropertyString("securityLevel", "L3")
+                                }
+                            } catch (_: UnsupportedDrmException) {
                                 DummyExoMediaDrm()
                             }
                         }
@@ -339,54 +339,58 @@ internal class BetterPlayer(
                 Log.e(TAG, "Protected content not supported on API levels below 18")
                 null
             } else {
+                // Uses the small shim you added earlier.
                 DefaultDrmSessionManager.Builder()
                     .setUuidAndExoMediaDrmProvider(
                         C.CLEARKEY_UUID,
                         FrameworkMediaDrm.DEFAULT_PROVIDER
-                    ).build(LocalMediaDrmCallback(clearKey.toByteArray()))
+                    )
+                    .build(LocalMediaDrmCallback(clearKey.toByteArray()))
             }
         } else {
             drmSessionManager = null
         }
 
-        // ---------------- HTTP stacks ----------------
-        var defaultHttp = DefaultHttpDataSource.Factory()
-            .setUserAgent(userAgent)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(8_000)
-            .setReadTimeoutMs(15_000)
+        // ---------------- Data sources ----------------
+        // One consistent HTTP stack: ext‑okhttp (this matches the working "main" package)
+        var okHttpFactory = OkHttpDataSource.Factory(
+            OkHttpClient.Builder()
+                .connectionPool(ConnectionPool(8, 60, java.util.concurrent.TimeUnit.SECONDS))
+                .retryOnConnectionFailure(true)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+        ).setUserAgent(userAgent)
 
-        var okHttp = OkHttpDataSource.Factory(okClient).setUserAgent(userAgent)
+        headers?.let { okHttpFactory = okHttpFactory.setDefaultRequestProperties(it) }
 
-        headers?.let {
-            defaultHttp = defaultHttp.setDefaultRequestProperties(it)
-            okHttp = okHttp.setDefaultRequestProperties(it)
-        }
-
-        // Upstream DS (with fallback for HLS)
-        val upstreamHttp: DataSource.Factory =
-            if (isHlsType) {
-                FallbackHttpDataSourceFactory(primary = defaultHttp, secondary = okHttp)
-            } else {
-                okHttp
-            }
-
-        // Wrap with cache (but bypass for .m3u8 internally)
+        // Upstream factory we give to the media source
+        // IMPORTANT: For HLS (live), do NOT cache at all for now (prevents stale playlist → 404).
         val mediaDataSourceFactory: DataSource.Factory =
-            if (DataSourceUtils.isHTTP(uri) && useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
-                HlsFriendlyCacheDataSourceFactory(
-                    context = context,
-                    maxCacheSize = maxCacheSize,
-                    maxCacheFileSize = maxCacheFileSize,
-                    upstreamFactory = upstreamHttp
-                )
-            } else if (DataSourceUtils.isHTTP(uri)) {
-                upstreamHttp
+            if (DataSourceUtils.isHTTP(uri)) {
+                if (isHlsType) {
+                    // No cache for HLS (playlists + segments) – maximizes compatibility with your CDN.
+                    DefaultDataSource.Factory(context, okHttpFactory)
+                } else if (useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
+                    // Progressive/DASH/SS → cache is OK
+                    CacheDataSourceFactory(
+                        context,
+                        maxCacheSize,
+                        maxCacheFileSize,
+                        okHttpFactory
+                    )
+                } else {
+                    DefaultDataSource.Factory(context, okHttpFactory)
+                }
             } else {
                 DefaultDataSource.Factory(context)
             }
 
-        val mediaSource = buildMediaSource(uri, mediaDataSourceFactory, formatHint, cacheKey, context)
+        val mediaSource = buildMediaSource(uri, mediaDataSourceFactory, formatHint, cacheKey, context, isHlsType)
+
         if (overriddenDuration != 0L) {
             val clippingMediaSource = ClippingMediaSource(mediaSource, 0, overriddenDuration * 1000)
             exoPlayer?.setMediaSource(clippingMediaSource)
@@ -395,8 +399,12 @@ internal class BetterPlayer(
         }
 
         exoPlayer?.prepare()
+
+        // Gentle initial ABR cap; will be lifted shortly
         applyBitrateCap(1_200_000)
         scheduleCapLift()
+
+        // Start offline playable ticker now
         startOfflineTicker()
 
         result.success(null)
@@ -407,58 +415,59 @@ internal class BetterPlayer(
         mediaDataSourceFactory: DataSource.Factory,
         formatHint: String?,
         cacheKey: String?,
-        context: Context
+        context: Context,
+        isHlsType: Boolean
     ): MediaSource {
         val type: Int = if (formatHint == null) {
-            val lastPathSegment = uri.lastPathSegment ?: ""
-            Util.inferContentType(lastPathSegment)
+            val lastPath = uri.lastPathSegment ?: ""
+            Util.inferContentType(lastPath)
         } else {
             when (formatHint) {
-                FORMAT_SS -> C.TYPE_SS
+                FORMAT_SS   -> C.TYPE_SS
                 FORMAT_DASH -> C.TYPE_DASH
-                FORMAT_HLS -> C.TYPE_HLS
-                FORMAT_OTHER -> C.TYPE_OTHER
-                else -> -1
+                FORMAT_HLS  -> C.TYPE_HLS
+                FORMAT_OTHER-> C.TYPE_OTHER
+                else        -> -1
             }
         }
+
         val mediaItemBuilder = MediaItem.Builder().setUri(uri)
         if (!cacheKey.isNullOrEmpty()) {
             mediaItemBuilder.setCustomCacheKey(cacheKey)
         }
         val mediaItem = mediaItemBuilder.build()
-        var drmSessionManagerProvider: DrmSessionManagerProvider? = null
+
+        var drmProvider: DrmSessionManagerProvider? = null
         drmSessionManager?.let { dsm ->
-            drmSessionManagerProvider = DrmSessionManagerProvider { dsm }
+            drmProvider = DrmSessionManagerProvider { dsm }
         }
 
         return when (type) {
             C.TYPE_SS -> SsMediaSource.Factory(
                 DefaultSsChunkSource.Factory(mediaDataSourceFactory),
                 DefaultDataSource.Factory(context, mediaDataSourceFactory)
-            ).setDrmSessionManagerProvider(drmSessionManagerProvider)
+            ).setDrmSessionManagerProvider(drmProvider)
                 .createMediaSource(mediaItem)
 
             C.TYPE_DASH -> DashMediaSource.Factory(
                 DefaultDashChunkSource.Factory(mediaDataSourceFactory),
                 DefaultDataSource.Factory(context, mediaDataSourceFactory)
-            ).setDrmSessionManagerProvider(drmSessionManagerProvider)
+            ).setDrmSessionManagerProvider(drmProvider)
                 .createMediaSource(mediaItem)
 
             C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)
-                // IMPORTANT for wide compatibility on live HLS:
-                .setAllowChunklessPreparation(false)
-                .setDrmSessionManagerProvider(drmSessionManagerProvider)
+                // Match the original Better Player default that works with your CDN:
+                .setAllowChunklessPreparation(true)
+                .setDrmSessionManagerProvider(drmProvider)
                 .createMediaSource(mediaItem)
 
             C.TYPE_OTHER -> ProgressiveMediaSource.Factory(
                 mediaDataSourceFactory,
                 DefaultExtractorsFactory()
-            ).setDrmSessionManagerProvider(drmSessionManagerProvider)
+            ).setDrmSessionManagerProvider(drmProvider)
                 .createMediaSource(mediaItem)
 
-            else -> {
-                throw IllegalStateException("Unsupported type: $type")
-            }
+            else -> throw IllegalStateException("Unsupported type: $type")
         }
     }
 
