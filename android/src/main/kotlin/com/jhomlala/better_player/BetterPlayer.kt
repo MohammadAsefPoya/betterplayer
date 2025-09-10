@@ -36,7 +36,13 @@ import com.google.android.exoplayer2.SeekParameters
 import com.google.android.exoplayer2.Timeline
 import com.google.android.exoplayer2.analytics.AnalyticsListener
 import com.google.android.exoplayer2.audio.AudioAttributes
-import com.google.android.exoplayer2.drm.*
+import com.google.android.exoplayer2.drm.DefaultDrmSessionManager
+import com.google.android.exoplayer2.drm.DrmSessionManager
+import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
+import com.google.android.exoplayer2.drm.DummyExoMediaDrm
+import com.google.android.exoplayer2.drm.FrameworkMediaDrm
+import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
+import com.google.android.exoplayer2.drm.UnsupportedDrmException
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSource
 import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory
@@ -60,7 +66,6 @@ import com.google.android.exoplayer2.upstream.DefaultBandwidthMeter
 import com.google.android.exoplayer2.upstream.DefaultDataSource
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
 import com.google.android.exoplayer2.upstream.HttpDataSource
-import com.google.android.exoplayer2.upstream.TransferListener
 import com.google.android.exoplayer2.upstream.cache.Cache
 import com.google.android.exoplayer2.upstream.cache.CacheKeyFactory
 import com.google.android.exoplayer2.upstream.cache.ContentMetadata
@@ -74,8 +79,6 @@ import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.IOException
-import java.lang.Exception
-import java.lang.IllegalStateException
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
@@ -165,9 +168,6 @@ internal class BetterPlayer(
         }
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // Init
-    // ---------------------------------------------------------------------------------------------
     init {
         // LoadControl (time-based, no byte cap)
         val loadBuilder = DefaultLoadControl.Builder()
@@ -1007,7 +1007,7 @@ internal class BetterPlayer(
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Audio track selection (unchanged)
+    // Audio track selection
     // ---------------------------------------------------------------------------------------------
     fun setAudioTrack(name: String, index: Int) {
         try {
@@ -1190,125 +1190,6 @@ internal class BetterPlayer(
                 WorkManager.getInstance(context).cancelAllWorkByTag(url)
             }
             result.success(null)
-        }
-    }
-}
-
-// =================================================================================================
-// Helper DS factories (kept in the same file so you don't miss them)
-// =================================================================================================
-
-/**
- * Try a primary HTTP DataSource first (DefaultHttpDataSource), and if it fails during open()
- * with a recoverable networking error/404, fall back to a secondary (OkHttpDataSource).
- */
-internal class FallbackHttpDataSourceFactory(
-    private val primary: HttpDataSource.Factory,
-    private val secondary: HttpDataSource.Factory
-) : DataSource.Factory {
-
-    override fun createDataSource(): DataSource {
-        val primaryDs = primary.createDataSource()
-        val secondaryDs = secondary.createDataSource()
-        return FallbackHttpDataSource(primaryDs, secondaryDs)
-    }
-}
-
-internal class FallbackHttpDataSource(
-    private val primary: DataSource,
-    private val secondary: DataSource
-) : DataSource {
-
-    private var current: DataSource? = null
-    private var listener: TransferListener? = null
-
-    override fun addTransferListener(transferListener: TransferListener) {
-        listener = transferListener
-        primary.addTransferListener(transferListener)
-        secondary.addTransferListener(transferListener)
-    }
-
-    @Throws(IOException::class)
-    override fun open(dataSpec: DataSpec): Long {
-        return try {
-            current = primary
-            primary.open(dataSpec)
-        } catch (e: IOException) {
-            // Log and switch
-            Log.w("BetterPlayer-FallbackDS", "Primary DS failed (${e.javaClass.simpleName}); switching to secondary")
-            current = secondary
-            secondary.open(dataSpec)
-        }
-    }
-
-    override fun read(buffer: ByteArray, offset: Int, readLength: Int): Int {
-        return current?.read(buffer, offset, readLength) ?: C.RESULT_END_OF_INPUT
-    }
-
-    override fun getUri(): Uri? = current?.uri
-
-    override fun close() {
-        try {
-            current?.close()
-        } catch (_: Exception) {
-        } finally {
-            current = null
-        }
-    }
-}
-
-/**
- * For HLS, we *bypass* caching the playlist (.m3u8) requests (these frequently 404 with variant
- * switching on some CDNs). For media chunks and progressive, we use your existing cache factory.
- *
- * NOTE: This wrapper uses your existing [CacheDataSourceFactory] class from the repo.
- */
-internal class HlsFriendlyCacheDataSourceFactory(
-    private val context: Context,
-    private val maxCacheSize: Long,
-    private val maxCacheFileSize: Long,
-    private val upstreamFactory: DataSource.Factory
-) : DataSource.Factory {
-
-    override fun createDataSource(): DataSource {
-        // We cannot inspect DataSpec here, so we return a small delegating DS that decides at open().
-        return object : DataSource {
-            private var ds: DataSource? = null
-            private var listener: TransferListener? = null
-
-            override fun addTransferListener(transferListener: TransferListener) {
-                listener = transferListener
-            }
-
-            @Throws(IOException::class)
-            override fun open(dataSpec: DataSpec): Long {
-                val uriString = dataSpec.uri.toString().lowercase()
-                ds = if (uriString.contains(".m3u8")) {
-                    // playlist -> never cached
-                    upstreamFactory.createDataSource()
-                } else {
-                    // chunks / progressive -> cached
-                    CacheDataSourceFactory(
-                        context,
-                        maxCacheSize,
-                        maxCacheFileSize,
-                        upstreamFactory
-                    ).createDataSource()
-                }
-                listener?.let { ds?.addTransferListener(it) }
-                return ds!!.open(dataSpec)
-            }
-
-            override fun read(buffer: ByteArray, offset: Int, readLength: Int): Int {
-                return ds?.read(buffer, offset, readLength) ?: C.RESULT_END_OF_INPUT
-            }
-
-            override fun getUri(): Uri? = ds?.uri
-
-            override fun close() {
-                try { ds?.close() } catch (_: Exception) {}
-                ds = null
-            }
         }
     }
 }
