@@ -143,9 +143,14 @@ class _BetterPlayerSubtitlesDrawerState
     if (_latestValue == null) return null;
 
     final Duration position = _latestValue!.position;
+    final Duration delay = widget.betterPlayerController.subtitleDelay;
+
     for (final BetterPlayerSubtitle subtitle
         in widget.betterPlayerController.subtitlesLines) {
-      if (subtitle.start! <= position && subtitle.end! >= position) {
+      final start = subtitle.start! + delay;
+      final end = subtitle.end! + delay;
+
+      if (start <= position && end >= position) {
         return subtitle;
       }
     }
