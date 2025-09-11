@@ -28,8 +28,9 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
   BetterPlayerControlsConfiguration get controlsConfiguration =>
       widget.controller!.betterPlayerControlsConfiguration;
 
+  // IMPORTANT: make this a broadcast stream so multiple listeners are OK
   final StreamController<bool> playerVisibilityStreamController =
-      StreamController();
+      StreamController<bool>.broadcast();
 
   bool _initialized = false;
 
@@ -125,7 +126,7 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
 
     final bool placeholderOnTop =
         betterPlayerController.betterPlayerConfiguration.placeholderOnTop;
-    // ignore: avoid_unnecessary_containers
+
     return Container(
       child: Stack(
         fit: StackFit.passthrough,
@@ -141,21 +142,21 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
           betterPlayerController.betterPlayerConfiguration.overlay ??
               Container(),
 
-          // --- CHANGED: Live subtitle configuration wrapper ---
+          // LIVE SUBTITLES: react to config changes without recreating controller
           ValueListenableBuilder<BetterPlayerSubtitlesConfiguration>(
-            valueListenable: betterPlayerController
-                .subtitlesConfigNotifier, // from the addon
+            valueListenable: betterPlayerController.subtitlesConfigNotifier,
             builder: (_, cfg, __) {
               return BetterPlayerSubtitlesDrawer(
-                key: ObjectKey(cfg), // forces repaint if the painter caches
+                // NOTE: no key here — keeping the same State avoids double listen
                 betterPlayerController: betterPlayerController,
-                betterPlayerSubtitlesConfiguration: cfg, // <- use live cfg
+                betterPlayerSubtitlesConfiguration: cfg, // live config
                 subtitles: betterPlayerController.subtitlesLines,
+                // this stream is broadcast now, so even if a rebuild overlaps,
+                // listening won't throw.
                 playerVisibilityStream: playerVisibilityStreamController.stream,
               );
             },
           ),
-          // --- end change ---
 
           if (!placeholderOnTop) _buildPlaceholder(betterPlayerController),
           _buildControls(context, betterPlayerController),
