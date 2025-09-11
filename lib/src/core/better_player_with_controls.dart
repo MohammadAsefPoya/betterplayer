@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'live_subtitles_addon.dart';
 import 'package:better_player/better_player.dart';
 import 'package:better_player/src/configuration/better_player_controller_event.dart';
 import 'package:better_player/src/controls/better_player_cupertino_controls.dart';
@@ -139,12 +140,22 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
           ),
           betterPlayerController.betterPlayerConfiguration.overlay ??
               Container(),
-          BetterPlayerSubtitlesDrawer(
-            betterPlayerController: betterPlayerController,
-            betterPlayerSubtitlesConfiguration: subtitlesConfiguration,
-            subtitles: betterPlayerController.subtitlesLines,
-            playerVisibilityStream: playerVisibilityStreamController.stream,
+
+          // --- CHANGED: Live subtitle configuration wrapper ---
+          ValueListenableBuilder<BetterPlayerSubtitlesConfiguration>(
+            valueListenable:
+                betterPlayerController.subtitlesConfigNotifier, // from addon
+            builder: (_, cfg, __) {
+              return BetterPlayerSubtitlesDrawer(
+                betterPlayerController: betterPlayerController,
+                betterPlayerSubtitlesConfiguration: cfg, // <- live cfg
+                subtitles: betterPlayerController.subtitlesLines,
+                playerVisibilityStream: playerVisibilityStreamController.stream,
+              );
+            },
           ),
+          // --- end change ---
+
           if (!placeholderOnTop) _buildPlaceholder(betterPlayerController),
           _buildControls(context, betterPlayerController),
         ],
