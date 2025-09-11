@@ -143,12 +143,13 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
 
           // --- CHANGED: Live subtitle configuration wrapper ---
           ValueListenableBuilder<BetterPlayerSubtitlesConfiguration>(
-            valueListenable:
-                betterPlayerController.subtitlesConfigNotifier, // from addon
+            valueListenable: betterPlayerController
+                .subtitlesConfigNotifier, // from the addon
             builder: (_, cfg, __) {
               return BetterPlayerSubtitlesDrawer(
+                key: ObjectKey(cfg), // forces repaint if the painter caches
                 betterPlayerController: betterPlayerController,
-                betterPlayerSubtitlesConfiguration: cfg, // <- live cfg
+                betterPlayerSubtitlesConfiguration: cfg, // <- use live cfg
                 subtitles: betterPlayerController.subtitlesLines,
                 playerVisibilityStream: playerVisibilityStreamController.stream,
               );
