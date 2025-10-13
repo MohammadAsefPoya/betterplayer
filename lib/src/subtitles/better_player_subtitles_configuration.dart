@@ -37,7 +37,7 @@ class BetterPlayerSubtitlesConfiguration {
   final Color backgroundColor;
 
   const BetterPlayerSubtitlesConfiguration({
-    this.fontSize = 14.0,
+    this.fontSize = 20.0,
     this.fontColor = Colors.white,
     this.outlineEnabled = true,
     this.outlineColor = Colors.black,
