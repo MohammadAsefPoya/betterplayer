@@ -35,31 +35,32 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) float playerRate;
 @property(nonatomic) int overriddenDuration;
 @property(nonatomic) AVPlayerTimeControlStatus lastAvPlayerTimeControlStatus;
+
+- (instancetype)initWithFrame:(CGRect)frame;
 - (void)play;
 - (void)pause;
 - (void)setIsLooping:(bool)isLooping;
-- (void)updatePlayingState;
-- (int64_t) duration;
-- (int64_t) position;
-
-- (instancetype)initWithFrame:(CGRect)frame;
-- (void)setMixWithOthers:(bool)mixWithOthers;
+- (void)setVolume:(double)volume;
 - (void)seekTo:(int)location;
+- (void)setMixWithOthers:(bool)mixWithOthers;
 - (void)setDataSourceAsset:(NSString*)asset withKey:(NSString*)key withCertificateUrl:(NSString*)certificateUrl withLicenseUrl:(NSString*)licenseUrl cacheKey:(NSString*)cacheKey cacheManager:(CacheManager*)cacheManager overriddenDuration:(int) overriddenDuration;
 - (void)setDataSourceURL:(NSURL*)url withKey:(NSString*)key withCertificateUrl:(NSString*)certificateUrl withLicenseUrl:(NSString*)licenseUrl withHeaders:(NSDictionary*)headers withCache:(BOOL)useCache cacheKey:(NSString*)cacheKey cacheManager:(CacheManager*)cacheManager overriddenDuration:(int) overriddenDuration videoExtension: (NSString*) videoExtension;
-- (void)setVolume:(double)volume;
 - (void)setSpeed:(double)speed result:(FlutterResult)result;
 - (void) setAudioTrack:(NSString*) name index:(int) index;
 - (void)setTrackParameters:(int) width: (int) height: (int)bitrate;
 - (void) enablePictureInPicture: (CGRect) frame;
 - (void)setPictureInPicture:(BOOL)pictureInPicture;
 - (void)disablePictureInPicture;
-- (int64_t)absolutePosition;
-- (int64_t) FLTCMTimeToMillis:(CMTime) time;
 
+- (int64_t)position;
+- (int64_t)duration;
+- (int64_t)absolutePosition; // Declaration for the new method
+
+- (void)updatePlayingState;
 - (void)clear;
 - (void)disposeSansEventChannel;
 - (void)dispose;
+
 @end
 
 NS_ASSUME_NONNULL_END

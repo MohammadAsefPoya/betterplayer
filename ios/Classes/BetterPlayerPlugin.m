@@ -4,6 +4,7 @@
 
 #import "BetterPlayerPlugin.h"
 #import <better_player/better_player-Swift.h>
+#import "BetterPlayerCache.h" // NEW CHANGE: Import the singleton cache manager
 
 #if !__has_feature(objc_arc)
 #error Code Requires ARC.
@@ -14,7 +15,7 @@
 NSMutableDictionary* _dataSourceDict;
 NSMutableDictionary*  _timeObserverIdDict;
 NSMutableDictionary*  _artworkImageDict;
-CacheManager* _cacheManager;
+// OLD: CacheManager* _cacheManager; // This instance is no longer needed
 int texturesCount = -1;
 BetterPlayer* _notificationPlayer;
 bool _remoteCommandsInitialized = false;
@@ -27,7 +28,6 @@ bool _remoteCommandsInitialized = false;
                                 binaryMessenger:[registrar messenger]];
     BetterPlayerPlugin* instance = [[BetterPlayerPlugin alloc] initWithRegistrar:registrar];
     [registrar addMethodCallDelegate:instance channel:channel];
-    //[registrar publish:instance];
     [registrar registerViewFactory:instance withId:@"com.jhomlala/better_player"];
 }
 
@@ -40,8 +40,8 @@ bool _remoteCommandsInitialized = false;
     _timeObserverIdDict = [NSMutableDictionary dictionary];
     _artworkImageDict = [NSMutableDictionary dictionary];
     _dataSourceDict = [NSMutableDictionary dictionary];
-    _cacheManager = [[CacheManager alloc] init];
-    [_cacheManager setup];
+    // NEW CHANGE: We no longer initialize a local CacheManager instance here.
+    // The BetterPlayerCache singleton will manage itself.
     return self;
 }
 
@@ -84,6 +84,8 @@ bool _remoteCommandsInitialized = false;
     _players[@(textureId)] = player;
     result(@{@"textureId" : @(textureId)});
 }
+
+// --- All of your custom remote notification logic is preserved below ---
 
 - (void) setupRemoteNotification :(BetterPlayer*) player{
     _notificationPlayer = player;
@@ -276,16 +278,16 @@ bool _remoteCommandsInitialized = false;
 
 }
 
+// --- End of preserved remote notification logic ---
+
 
 - (void)handleMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
 
 
     if ([@"init" isEqualToString:call.method]) {
-        // Allow audio playback when the Ring/Silent switch is set to silent
         for (NSNumber* textureId in _players) {
             [_players[textureId] dispose];
         }
-
         [_players removeAllObjects];
         result(nil);
     } else if ([@"create" isEqualToString:call.method]) {
@@ -297,8 +299,7 @@ bool _remoteCommandsInitialized = false;
         BetterPlayer* player = _players[@(textureId)];
         if ([@"setDataSource" isEqualToString:call.method]) {
             [player clear];
-            // This call will clear cached frame because we will return transparent frame
-
+            
             NSDictionary* dataSource = argsMap[@"dataSource"];
             [_dataSourceDict setObject:dataSource forKey:[self getTextureId:player]];
             NSString* assetArg = dataSource[@"asset"];
@@ -321,9 +322,13 @@ bool _remoteCommandsInitialized = false;
             if (useCacheObject != [NSNull null]) {
                 useCache = [[dataSource objectForKey:@"useCache"] boolValue];
                 if (useCache){
-                    [_cacheManager setMaxCacheSize:maxCacheSize];
+                    // NEW CHANGE: Configure the cache size on the singleton instance
+                    [[BetterPlayerCache sharedInstance] setupCache:[maxCacheSize longValue]];
                 }
             }
+            
+            // NEW CHANGE: Get the shared CacheManager from our singleton
+            CacheManager* cacheManager = [[BetterPlayerCache sharedInstance] cacheManager];
 
             if (headers == [NSNull null] || headers == NULL){
                 headers = @{};
@@ -337,9 +342,11 @@ bool _remoteCommandsInitialized = false;
                 } else {
                     assetPath = [_registrar lookupKeyForAsset:assetArg];
                 }
-                [player setDataSourceAsset:assetPath withKey:key withCertificateUrl:certificateUrl withLicenseUrl: licenseUrl cacheKey:cacheKey cacheManager:_cacheManager overriddenDuration:overriddenDuration];
+                // NEW CHANGE: Pass the singleton's cacheManager instance to the player
+                [player setDataSourceAsset:assetPath withKey:key withCertificateUrl:certificateUrl withLicenseUrl: licenseUrl cacheKey:cacheKey cacheManager:cacheManager overriddenDuration:overriddenDuration];
             } else if (uriArg) {
-                [player setDataSourceURL:[NSURL URLWithString:uriArg] withKey:key withCertificateUrl:certificateUrl withLicenseUrl: licenseUrl withHeaders:headers withCache: useCache cacheKey:cacheKey cacheManager:_cacheManager overriddenDuration:overriddenDuration videoExtension: videoExtension];
+                // NEW CHANGE: Pass the singleton's cacheManager instance to the player
+                [player setDataSourceURL:[NSURL URLWithString:uriArg] withKey:key withCertificateUrl:certificateUrl withLicenseUrl: licenseUrl withHeaders:headers withCache: useCache cacheKey:cacheKey cacheManager:cacheManager overriddenDuration:overriddenDuration videoExtension: videoExtension];
             } else {
                 result(FlutterMethodNotImplemented);
             }
@@ -349,16 +356,7 @@ bool _remoteCommandsInitialized = false;
             [self disposeNotificationData:player];
             [self setRemoteCommandsNotificationNotActive];
             [_players removeObjectForKey:@(textureId)];
-            // If the Flutter contains https://github.com/flutter/engine/pull/12695,
-            // the `player` is disposed via `onTextureUnregistered` at the right time.
-            // Without https://github.com/flutter/engine/pull/12695, there is no guarantee that the
-            // texture has completed the un-reregistration. It may leads a crash if we dispose the
-            // `player` before the texture is unregistered. We add a dispatch_after hack to make sure the
-            // texture is unregistered before we dispose the `player`.
-            //
-            // TODO(cyanglaz): Remove this dispatch block when
-            // https://github.com/flutter/flutter/commit/8159a9906095efc9af8b223f5e232cb63542ad0b is in
-            // stable And update the min flutter version of the plugin to the stable version.
+            
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 if (!player.disposed) {
@@ -382,6 +380,7 @@ bool _remoteCommandsInitialized = false;
         } else if ([@"position" isEqualToString:call.method]) {
             result(@([player position]));
         } else if ([@"absolutePosition" isEqualToString:call.method]) {
+            // This logic is preserved
             result(@([player absolutePosition]));
         } else if ([@"seekTo" isEqualToString:call.method]) {
             [player seekTo:[argsMap[@"location"] intValue]];
@@ -437,11 +436,14 @@ bool _remoteCommandsInitialized = false;
                 videoExtension = nil;
             }
             
+            // NEW CHANGE: Use the singleton cache manager
+            CacheManager* cacheManager = [[BetterPlayerCache sharedInstance] cacheManager];
+            
             if (urlArg != [NSNull null]){
                 NSURL* url = [NSURL URLWithString:urlArg];
-                if ([_cacheManager isPreCacheSupportedWithUrl:url videoExtension:videoExtension]){
-                    [_cacheManager setMaxCacheSize:maxCacheSize];
-                    [_cacheManager preCacheURL:url cacheKey:cacheKey videoExtension:videoExtension withHeaders:headers completionHandler:^(BOOL success){
+                if ([cacheManager isPreCacheSupportedWithUrl:url videoExtension:videoExtension]){
+                    [[BetterPlayerCache sharedInstance] setupCache:[maxCacheSize longValue]];
+                    [cacheManager preCacheURL:url cacheKey:cacheKey videoExtension:videoExtension withHeaders:headers completionHandler:^(BOOL success){
                     }];
                 } else {
                     NSLog(@"Pre cache is not supported for given data source.");
@@ -449,16 +451,21 @@ bool _remoteCommandsInitialized = false;
             }
             result(nil);
         } else if ([@"clearCache" isEqualToString:call.method]){
-            [_cacheManager clearCache];
+            // NEW CHANGE: Use the singleton's static method to clear the cache
+            [BetterPlayerCache clearCache];
             result(nil);
         } else if ([@"stopPreCache" isEqualToString:call.method]){
             NSString* urlArg = argsMap[@"url"];
             NSString* cacheKey = argsMap[@"cacheKey"];
             NSString* videoExtension = argsMap[@"videoExtension"];
+            
+            // NEW CHANGE: Use the singleton cache manager
+            CacheManager* cacheManager = [[BetterPlayerCache sharedInstance] cacheManager];
+            
             if (urlArg != [NSNull null]){
                 NSURL* url = [NSURL URLWithString:urlArg];
-                if ([_cacheManager isPreCacheSupportedWithUrl:url videoExtension:videoExtension]){
-                    [_cacheManager stopPreCache:url cacheKey:cacheKey
+                if ([cacheManager isPreCacheSupportedWithUrl:url videoExtension:videoExtension]){
+                    [cacheManager stopPreCache:url cacheKey:cacheKey
                               completionHandler:^(BOOL success){
                     }];
                 } else {

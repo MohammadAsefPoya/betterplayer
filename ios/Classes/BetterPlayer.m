@@ -117,11 +117,9 @@ AVPictureInPictureController *_pipController;
         if (_eventSink) {
             _eventSink(@{@"event" : @"completed", @"key" : _key});
             [ self removeObservers];
-
         }
     }
 }
-
 
 static inline CGFloat radiansToDegrees(CGFloat radians) {
     // Input range [-pi, pi] or [-180, 180]
@@ -172,10 +170,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (CGAffineTransform)fixTransform:(AVAssetTrack*)videoTrack {
   CGAffineTransform transform = videoTrack.preferredTransform;
-  // TODO(@recastrodiaz): why do we need to do this? Why is the preferredTransform incorrect?
-  // At least 2 user videos show a black screen when in portrait mode if we directly use the
-  // videoTrack.preferredTransform Setting tx to the height of the video instead of 0, properly
-  // displays the video https://github.com/flutter/flutter/issues/17606#issuecomment-413473181
   NSInteger rotationDegrees = (NSInteger)round(radiansToDegrees(atan2(transform.b, transform.a)));
   if (rotationDegrees == 90) {
     transform.tx = videoTrack.naturalSize.height;
@@ -225,7 +219,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         item = [AVPlayerItem playerItemWithAsset:asset];
     }
 
-    if (@available(iOS 10.0, *) && overriddenDuration > 0) {
+    if (overriddenDuration > 0) {
         _overriddenDuration = overriddenDuration;
     }
     return [self setDataSourcePlayerItem:item withKey:key];
@@ -248,12 +242,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
                     if (self->_disposed) return;
                     if ([videoTrack statusOfValueForKey:@"preferredTransform"
                                                   error:nil] == AVKeyValueStatusLoaded) {
-                        // Rotate the video by using a videoComposition and the preferredTransform
                         self->_preferredTransform = [self fixTransform:videoTrack];
-                        // Note:
-                        // https://developer.apple.com/documentation/avfoundation/avplayeritem/1388818-videocomposition
-                        // Video composition can only be used with file-based media and is not supported for
-                        // use with media served using HTTP Live Streaming.
                         AVMutableVideoComposition* videoComposition =
                         [self getVideoCompositionWithTransform:self->_preferredTransform
                                                      withAsset:asset
@@ -295,7 +284,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
             return;
         }
         [self performSelector:@selector(startStalledCheck) withObject:nil afterDelay:1];
-
     }
 }
 
@@ -311,7 +299,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     } else {
         return 0;
     }
-
 }
 
 - (void)observeValueForKeyPath:(NSString*)path
@@ -343,10 +330,10 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
             }
         }
 
-        if (_player.rate == 0 && //if player rate dropped to 0
-            CMTIME_COMPARE_INLINE(_player.currentItem.currentTime, >, kCMTimeZero) && //if video was started
-            CMTIME_COMPARE_INLINE(_player.currentItem.currentTime, <, _player.currentItem.duration) && //but not yet finished
-            _isPlaying) { //instance variable to handle overall state (changed to YES when user triggers playback)
+        if (_player.rate == 0 &&
+            CMTIME_COMPARE_INLINE(_player.currentItem.currentTime, >, kCMTimeZero) &&
+            CMTIME_COMPARE_INLINE(_player.currentItem.currentTime, <, _player.currentItem.duration) &&
+            _isPlaying) {
             [self handleStalled];
         }
     }
@@ -364,23 +351,34 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
                         end = endTime;
                     }
                 }
-
                 [values addObject:@[ @(start), @(end) ]];
             }
             _eventSink(@{@"event" : @"bufferingUpdate", @"values" : values, @"key" : _key});
         }
     }
     else if (context == presentationSizeContext){
+        // NEW CHANGE: Send a specific event for video size changes.
+        // This mirrors the onVideoSizeChanged listener in the Android code.
+        CGSize size = [_player currentItem].presentationSize;
+        CGFloat width = size.width;
+        CGFloat height = size.height;
+
+        if (width > 0 && height > 0 && _eventSink) {
+             _eventSink(@{
+                @"event" : @"videoSizeChanged",
+                @"width" : @(width),
+                @"height": @(height),
+                @"key"   : _key
+            });
+        }
         [self onReadyToPlay];
     }
-
     else if (context == statusContext) {
         AVPlayerItem* item = (AVPlayerItem*)object;
         switch (item.status) {
             case AVPlayerItemStatusFailed:
                 NSLog(@"Failed to load video:");
                 NSLog(item.error.debugDescription);
-
                 if (_eventSink != nil) {
                     _eventSink([FlutterError
                                 errorWithCode:@"VideoError"
@@ -447,29 +445,24 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         CGFloat width = size.width;
         CGFloat height = size.height;
 
-
         AVAsset *asset = _player.currentItem.asset;
         bool onlyAudio =  [[asset tracksWithMediaType:AVMediaTypeVideo] count] == 0;
 
-        // The player has not yet initialized.
         if (!onlyAudio && height == CGSizeZero.height && width == CGSizeZero.width) {
             return;
         }
         const BOOL isLive = CMTIME_IS_INDEFINITE([_player currentItem].duration);
-        // The player may be initialized but still needs to determine the duration.
         if (isLive == false && [self duration] == 0) {
             return;
         }
 
-        //Fix from https://github.com/flutter/flutter/issues/66413
         AVPlayerItemTrack *track = [self.player currentItem].tracks.firstObject;
         CGSize naturalSize = track.assetTrack.naturalSize;
         CGAffineTransform prefTrans = track.assetTrack.preferredTransform;
         CGSize realSize = CGSizeApplyAffineTransform(naturalSize, prefTrans);
 
-        int64_t duration = [BetterPlayerTimeUtils FLTCMTimeToMillis:(_player.currentItem.asset.duration)];
-        if (_overriddenDuration > 0 && duration > _overriddenDuration){
-            _player.currentItem.forwardPlaybackEndTime = CMTimeMake(_overriddenDuration/1000, 1);
+        if (_overriddenDuration > 0){
+            _player.currentItem.forwardPlaybackEndTime = CMTimeMake(_overriddenDuration, 1000);
         }
 
         _isInitialized = true;
@@ -500,8 +493,13 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     return [BetterPlayerTimeUtils FLTCMTimeToMillis:([_player currentTime])];
 }
 
+// NEW CHANGE: Added absolutePosition method to mirror Android functionality for live streams.
 - (int64_t)absolutePosition {
-    return [BetterPlayerTimeUtils FLTNSTimeIntervalToMillis:([[[_player currentItem] currentDate] timeIntervalSince1970])];
+    NSDate* currentDate = [[_player currentItem] currentDate];
+    if (currentDate != nil) {
+        return (int64_t)([currentDate timeIntervalSince1970] * 1000.0);
+    }
+    return [self position];
 }
 
 - (int64_t)duration {
@@ -519,7 +517,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)seekTo:(int)location {
-    ///When player is playing, pause video, seek to new position and start again. This will prevent issues with seekbar jumps.
     bool wasPlaying = _isPlaying;
     if (wasPlaying){
         [_player pause];
@@ -572,7 +569,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     }
 }
 
-
 - (void)setTrackParameters:(int) width: (int) height: (int)bitrate {
     _player.currentItem.preferredPeakBitRate = bitrate;
     if (@available(iOS 11.0, *)) {
@@ -596,9 +592,8 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [_pipController stopPictureInPicture];
             });
-        } else {
-            // Fallback on earlier versions
-        } }
+        }
+    }
 }
 
 #if TARGET_OS_IOS
@@ -618,8 +613,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
             _pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:self._playerLayer];
             _pipController.delegate = self;
         }
-    } else {
-        // Fallback on earlier versions
     }
 }
 
@@ -632,12 +625,10 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 {
     if( _player )
     {
-        // Create new controller passing reference to the AVPlayerLayer
         self._playerLayer = [AVPlayerLayer playerLayerWithPlayer:_player];
         UIViewController* vc = [[[UIApplication sharedApplication] keyWindow] rootViewController];
         self._playerLayer.frame = frame;
         self._playerLayer.needsDisplayOnBoundsChange = YES;
-        //  [self._playerLayer addObserver:self forKeyPath:readyForDisplayKeyPath options:NSKeyValueObservingOptionNew context:nil];
         [vc.view.layer addSublayer:self._playerLayer];
         vc.view.layer.needsDisplayOnBoundsChange = YES;
         if (@available(iOS 9.0, *)) {
@@ -665,26 +656,23 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 #endif
 
 #if TARGET_OS_IOS
-- (void)pictureInPictureControllerDidStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController  API_AVAILABLE(ios(9.0)){
+- (void)pictureInPictureControllerDidStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
     [self disablePictureInPicture];
 }
 
-- (void)pictureInPictureControllerDidStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController  API_AVAILABLE(ios(9.0)){
+- (void)pictureInPictureControllerDidStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
     if (_eventSink != nil) {
         _eventSink(@{@"event" : @"pipStart"});
     }
 }
 
-- (void)pictureInPictureControllerWillStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController  API_AVAILABLE(ios(9.0)){
-
+- (void)pictureInPictureControllerWillStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
 }
 
 - (void)pictureInPictureControllerWillStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
-
 }
 
 - (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController failedToStartPictureInPictureWithError:(NSError *)error {
-
 }
 
 - (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
@@ -695,7 +683,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     AVMediaSelectionGroup *audioSelectionGroup = [[[_player currentItem] asset] mediaSelectionGroupForMediaCharacteristic: AVMediaCharacteristicAudible];
     NSArray* options = audioSelectionGroup.options;
 
-
     for (int audioTrackIndex = 0; audioTrackIndex < [options count]; audioTrackIndex++) {
         AVMediaSelectionOption* option = [options objectAtIndex:audioTrackIndex];
         NSArray *metaDatas = [AVMetadataItem metadataItemsFromArray:option.commonMetadata withKey:@"title" keySpace:@"comn"];
@@ -705,9 +692,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
                 [[_player currentItem] selectMediaOption:option inMediaSelectionGroup: audioSelectionGroup];
             }
         }
-
     }
-
 }
 
 - (void)setMixWithOthers:(bool)mixWithOthers {
@@ -719,8 +704,6 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
   }
 }
-
-
 #endif
 
 - (FlutterError* _Nullable)onCancelWithArguments:(id _Nullable)arguments {
@@ -731,18 +714,10 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 - (FlutterError* _Nullable)onListenWithArguments:(id _Nullable)arguments
                                        eventSink:(nonnull FlutterEventSink)events {
     _eventSink = events;
-    // TODO(@recastrodiaz): remove the line below when the race condition is resolved:
-    // https://github.com/flutter/flutter/issues/21483
-    // This line ensures the 'initialized' event is sent when the event
-    // 'AVPlayerItemStatusReadyToPlay' fires before _eventSink is set (this function
-    // onListenWithArguments is called)
     [self onReadyToPlay];
     return nil;
 }
 
-/// This method allows you to dispose without touching the event channel.  This
-/// is useful for the case where the Engine is in the process of deconstruction
-/// so the channel is going to die or is already dead.
 - (void)disposeSansEventChannel {
     @try{
         [self clear];
