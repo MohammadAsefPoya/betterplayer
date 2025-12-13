@@ -1,34 +1,19 @@
-import 'dart:typed_data';
-
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 class SchemeData {
   SchemeData({
-//    @required this.uuid,
     this.licenseServerUrl,
     required this.mimeType,
     this.data,
     this.requiresSecureDecryption,
   });
 
-//  /// The uuid of the DRM scheme, or null if the data is universal (i.e. applies to all schemes).
-//  final String uuid;
-
-  /// The URL of the server to which license requests should be made. May be null if unknown.
   final String? licenseServerUrl;
-
-  /// The mimeType of [data].
   final String mimeType;
-
-  /// The initialization base data.
-  /// you should build pssh manually for use.
   final Uint8List? data;
-
-  /// Whether secure decryption is required.
   final bool? requiresSecureDecryption;
 
   SchemeData copyWithData(Uint8List? data) => SchemeData(
-//        uuid: uuid,
         licenseServerUrl: licenseServerUrl,
         mimeType: mimeType,
         data: data,
@@ -40,19 +25,17 @@ class SchemeData {
     if (other is SchemeData) {
       return other.mimeType == mimeType &&
           other.licenseServerUrl == licenseServerUrl &&
-//          other.uuid == uuid &&
           other.requiresSecureDecryption == requiresSecureDecryption &&
-          other.data == data;
+          listEquals(other.data, data);
     }
-
     return false;
   }
 
   @override
   int get hashCode => Object.hash(
-      /*uuid, */
-      licenseServerUrl,
-      mimeType,
-      data,
-      requiresSecureDecryption);
+        licenseServerUrl,
+        mimeType,
+        requiresSecureDecryption,
+        data == null ? null : Object.hashAll(data!),
+      );
 }
