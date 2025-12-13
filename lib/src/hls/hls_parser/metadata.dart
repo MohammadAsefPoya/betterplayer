@@ -16,5 +16,5 @@ class Metadata {
   }
 
   @override
-  int get hashCode => list.hashCode;
+  int get hashCode => Object.hashAll(list);
 }
