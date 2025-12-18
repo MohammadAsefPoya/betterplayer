@@ -220,6 +220,9 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 dispose(player, textureId)
                 result.success(null)
             }
+            TAKE_SNAPSHOT_METHOD -> {
+                player.takeSnapshot(result)
+            }
             else -> result.notImplemented()
         }
     }
@@ -545,5 +548,6 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         private const val DISPOSE_METHOD = "dispose"
         private const val PRE_CACHE_METHOD = "preCache"
         private const val STOP_PRE_CACHE_METHOD = "stopPreCache"
+        private const val TAKE_SNAPSHOT_METHOD = "takeSnapshot"
     }
 }

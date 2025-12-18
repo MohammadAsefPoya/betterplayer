@@ -338,6 +338,21 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
   }
 
   @override
+  Future<Uint8List?> takeSnapshot(int textureId) async {
+    try {
+      final Uint8List? bytes = await _channel.invokeMethod<Uint8List>(
+        'takeSnapshot',
+        <String, dynamic>{
+          'textureId': textureId,
+        },
+      );
+      return bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
   Stream<VideoEvent> videoEventsFor(int? textureId) {
     return _eventChannelFor(textureId)
         .receiveBroadcastStream()

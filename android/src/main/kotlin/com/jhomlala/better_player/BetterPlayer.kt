@@ -55,6 +55,9 @@ import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory
 import io.flutter.plugin.common.EventChannel.EventSink
 import androidx.media.session.MediaButtonReceiver
 import androidx.work.Data
+import android.graphics.Rect
+import android.os.HandlerThread
+import android.view.PixelCopy
 import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
@@ -388,6 +391,60 @@ internal class BetterPlayer(
             playerNotificationManager?.setPlayer(null)
         }
         bitmap = null
+    }
+
+    fun takeSnapshot(result: MethodChannel.Result) {
+        if (surface == null) {
+            result.error("SNAPSHOT_FAILED", "Surface is null", null)
+            return
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            result.error("SNAPSHOT_UNSUPPORTED", "API < 24", null)
+            return
+        }
+
+        try {
+            val width = exoPlayer?.videoFormat?.width ?: 0
+            val height = exoPlayer?.videoFormat?.height ?: 0
+
+            if (width <= 0 || height <= 0) {
+                result.error("SNAPSHOT_FAILED", "Invalid video size", null)
+                return
+            }
+
+            val bitmap = Bitmap.createBitmap(
+                width,
+                height,
+                Bitmap.Config.ARGB_8888
+            )
+
+            val handlerThread = HandlerThread("PixelCopyThread")
+            handlerThread.start()
+
+            PixelCopy.request(
+                surface!!,
+                bitmap,
+                { copyResult ->
+                    handlerThread.quitSafely()
+
+                    if (copyResult == PixelCopy.SUCCESS) {
+                        val output = java.io.ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                        result.success(output.toByteArray())
+                    } else {
+                        result.error(
+                            "SNAPSHOT_FAILED",
+                            "PixelCopy failed: $copyResult",
+                            null
+                        )
+                    }
+                },
+                Handler(handlerThread.looper)
+            )
+        } catch (e: Exception) {
+            result.error("SNAPSHOT_FAILED", e.message, null)
+        }
     }
 
     private fun buildMediaSource(

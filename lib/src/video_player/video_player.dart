@@ -505,6 +505,12 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     await _videoPlayerPlatform.setSpeed(_textureId, value.speed);
   }
 
+  Future<Uint8List?> takeSnapshot() async {
+    if (_textureId == null) return null;
+
+    return _videoPlayerPlatform.takeSnapshot(_textureId!);
+  }
+
   /// The position in the current video.
   Future<Duration?> get position async {
     if (!value.initialized && _isDisposed) {

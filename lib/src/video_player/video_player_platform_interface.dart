@@ -116,6 +116,8 @@ abstract class VideoPlayerPlatform {
     throw UnimplementedError('setSpeed() has not been implemented.');
   }
 
+  Future<Uint8List?> takeSnapshot(int textureId);
+
   /// Sets the video track parameters (used to select quality of the video)
   Future<void> setTrackParameters(
       int? textureId, int? width, int? height, int? bitrate) {

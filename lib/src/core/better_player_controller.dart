@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:better_player/better_player.dart';
 import 'package:better_player/src/configuration/better_player_controller_event.dart';
 import 'package:better_player/src/core/better_player_utils.dart';
@@ -726,6 +727,10 @@ class BetterPlayerController {
         },
       ),
     );
+  }
+
+  Future<Uint8List?> takeSnapshot() async {
+    return await videoPlayerController?.takeSnapshot();
   }
 
   ///Flag which determines whenever player is playing or not.
