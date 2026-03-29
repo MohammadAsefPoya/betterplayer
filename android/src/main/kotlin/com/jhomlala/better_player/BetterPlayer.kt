@@ -59,6 +59,7 @@ import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
+import com.google.android.exoplayer2.source.BehindLiveWindowException
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
 import com.google.android.exoplayer2.upstream.DataSource
@@ -97,6 +98,10 @@ internal class BetterPlayer(
     private val customDefaultLoadControl: CustomDefaultLoadControl =
         customDefaultLoadControl ?: CustomDefaultLoadControl()
     private var lastSendBufferedPosition = 0L
+    private var currentMediaSource: MediaSource? = null
+    private var currentContentType: Int? = null
+    private var behindLiveWindowRecoveryAttempts = 0
+    private var lastBehindLiveWindowRecoveryTimestampMs = 0L
 
     init {
         val loadBuilder = DefaultLoadControl.Builder()
@@ -210,6 +215,7 @@ internal class BetterPlayer(
             dataSourceFactory = DefaultDataSource.Factory(context)
         }
         val mediaSource = buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context)
+        currentMediaSource = mediaSource
         if (overriddenDuration != 0L) {
             val clippingMediaSource = ClippingMediaSource(mediaSource, 0, overriddenDuration * 1000)
             exoPlayer?.setMediaSource(clippingMediaSource)
@@ -413,6 +419,7 @@ internal class BetterPlayer(
                 else -> -1
             }
         }
+        currentContentType = type
         val mediaItemBuilder = MediaItem.Builder()
         mediaItemBuilder.setUri(uri)
         if (cacheKey != null && cacheKey.isNotEmpty()) {
@@ -477,6 +484,7 @@ internal class BetterPlayer(
                         eventSink.success(event)
                     }
                     Player.STATE_READY -> {
+                        behindLiveWindowRecoveryAttempts = 0
                         if (!isInitialized) {
                             isInitialized = true
                             sendInitialized()
@@ -498,6 +506,9 @@ internal class BetterPlayer(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (shouldRecoverFromBehindLiveWindow(error) && recoverFromBehindLiveWindow()) {
+                    return
+                }
                 eventSink.error("VideoError", "Video player had error $error", "")
             }
         })
@@ -616,6 +627,49 @@ internal class BetterPlayer(
             }
             eventSink.success(event)
         }
+    }
+
+    private fun shouldRecoverFromBehindLiveWindow(error: PlaybackException): Boolean {
+        if (currentContentType != C.TYPE_HLS) {
+            return false
+        }
+
+        var currentCause: Throwable? = error.cause
+        while (currentCause != null) {
+            if (currentCause is BehindLiveWindowException) {
+                return true
+            }
+            currentCause = currentCause.cause
+        }
+
+        return false
+    }
+
+    private fun recoverFromBehindLiveWindow(): Boolean {
+        val player = exoPlayer ?: return false
+        val mediaSource = currentMediaSource ?: return false
+        val now = System.currentTimeMillis()
+        if (behindLiveWindowRecoveryAttempts >= MAX_BEHIND_LIVE_WINDOW_RECOVERY_ATTEMPTS &&
+            now - lastBehindLiveWindowRecoveryTimestampMs < BEHIND_LIVE_WINDOW_RECOVERY_WINDOW_MS
+        ) {
+            Log.w(TAG, "BehindLiveWindow recovery skipped due to retry limit")
+            return false
+        }
+
+        if (now - lastBehindLiveWindowRecoveryTimestampMs >= BEHIND_LIVE_WINDOW_RECOVERY_WINDOW_MS) {
+            behindLiveWindowRecoveryAttempts = 0
+        }
+
+        behindLiveWindowRecoveryAttempts += 1
+        lastBehindLiveWindowRecoveryTimestampMs = now
+
+        val shouldResumePlayback = player.playWhenReady
+        Log.w(TAG, "Recovering from BehindLiveWindowException by seeking to live edge")
+        player.setMediaSource(mediaSource, true)
+        player.prepare()
+        player.seekToDefaultPosition()
+        player.playWhenReady = shouldResumePlayback
+        return true
     }
 
     private fun getDuration(): Long = exoPlayer?.duration ?: 0L
@@ -783,6 +837,8 @@ internal class BetterPlayer(
         private const val FORMAT_OTHER = "other"
         private const val DEFAULT_NOTIFICATION_CHANNEL = "BETTER_PLAYER_NOTIFICATION"
         private const val NOTIFICATION_ID = 20772077
+        private const val MAX_BEHIND_LIVE_WINDOW_RECOVERY_ATTEMPTS = 3
+        private const val BEHIND_LIVE_WINDOW_RECOVERY_WINDOW_MS = 30_000L
 
         //Clear cache without accessing BetterPlayerCache.
         fun clearCache(context: Context?, result: MethodChannel.Result) {

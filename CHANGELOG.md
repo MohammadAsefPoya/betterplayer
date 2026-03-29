@@ -1,3 +1,6 @@
+## 0.0.85
+* Fixed Android live HLS playback recovery by intercepting `BehindLiveWindowException` and jumping back to the current live edge instead of surfacing a fatal playback error.
+
 ## 0.0.84
 * [BREAKING_CHANGE] Updated min. Flutter version to 3.3.0 and min. Dart version to 3.0.0.
 * Recreated example project.
