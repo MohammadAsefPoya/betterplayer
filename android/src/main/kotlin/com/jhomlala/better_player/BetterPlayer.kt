@@ -90,6 +90,7 @@ internal class BetterPlayer(
     private var refreshHandler: Handler? = null
     private var refreshRunnable: Runnable? = null
     private var exoPlayerEventListener: Player.Listener? = null
+    private var playbackEventListener: Player.Listener? = null
     private var bitmap: Bitmap? = null
     private var mediaSession: MediaSessionCompat? = null
     private var drmSessionManager: DrmSessionManager? = null
@@ -102,6 +103,7 @@ internal class BetterPlayer(
     private var currentContentType: Int? = null
     private var behindLiveWindowRecoveryAttempts = 0
     private var lastBehindLiveWindowRecoveryTimestampMs = 0L
+    private var lastKnownIsPlaying: Boolean? = null
 
     init {
         val loadBuilder = DefaultLoadControl.Builder()
@@ -474,6 +476,14 @@ internal class BetterPlayer(
         surface = Surface(textureEntry.surfaceTexture())
         exoPlayer?.setVideoSurface(surface)
         setAudioAttributes(exoPlayer, true)
+        playbackEventListener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                sendPlayPauseEventIfNeeded(isPlaying)
+            }
+        }
+        playbackEventListener?.let { listener ->
+            exoPlayer?.addListener(listener)
+        }
         exoPlayer?.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
@@ -552,6 +562,17 @@ internal class BetterPlayer(
 
     fun pause() {
         exoPlayer?.playWhenReady = false
+    }
+
+    private fun sendPlayPauseEventIfNeeded(isPlaying: Boolean) {
+        if (lastKnownIsPlaying == isPlaying) {
+            return
+        }
+        lastKnownIsPlaying = isPlaying
+        val event: MutableMap<String, Any> = HashMap()
+        event["event"] = if (isPlaying) "play" else "pause"
+        key?.let { event["key"] = it }
+        eventSink.success(event)
     }
 
     fun setLooping(value: Boolean) {
@@ -806,6 +827,10 @@ internal class BetterPlayer(
     fun dispose() {
         disposeMediaSession()
         disposeRemoteNotifications()
+        playbackEventListener?.let { listener ->
+            exoPlayer?.removeListener(listener)
+        }
+        playbackEventListener = null
         if (isInitialized) {
             exoPlayer?.stop()
         }

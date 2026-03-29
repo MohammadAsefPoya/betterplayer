@@ -238,10 +238,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           break;
 
         case VideoEventType.play:
-          play();
+          _updatePlayingStateFromEvent(true);
           break;
         case VideoEventType.pause:
-          pause();
+          _updatePlayingStateFromEvent(false);
           break;
         case VideoEventType.seek:
           seekTo(event.position);
@@ -461,34 +461,49 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     if (!_created || _isDisposed) {
       return;
     }
-    _timer?.cancel();
     if (value.isPlaying) {
       await _videoPlayerPlatform.play(_textureId);
-      _timer = Timer.periodic(
-        const Duration(milliseconds: 300),
-        (Timer timer) async {
-          if (_isDisposed) {
-            return;
-          }
-          final Duration? newPosition = await position;
-          final DateTime? newAbsolutePosition = await absolutePosition;
-          // ignore: invariant_booleans
-          if (_isDisposed) {
-            return;
-          }
-          _updatePosition(newPosition, absolutePosition: newAbsolutePosition);
-          if (_seekPosition != null && newPosition != null) {
-            final difference =
-                newPosition.inMilliseconds - _seekPosition!.inMilliseconds;
-            if (difference > 0) {
-              _seekPosition = null;
-            }
-          }
-        },
-      );
+      _startPositionUpdateTimer();
     } else {
+      _timer?.cancel();
       await _videoPlayerPlatform.pause(_textureId);
     }
+  }
+
+  void _updatePlayingStateFromEvent(bool isPlaying) {
+    if (value.isPlaying != isPlaying) {
+      value = value.copyWith(isPlaying: isPlaying);
+    }
+    if (isPlaying) {
+      _startPositionUpdateTimer();
+    } else {
+      _timer?.cancel();
+    }
+  }
+
+  void _startPositionUpdateTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(
+      const Duration(milliseconds: 300),
+      (Timer timer) async {
+        if (_isDisposed) {
+          return;
+        }
+        final Duration? newPosition = await position;
+        final DateTime? newAbsolutePosition = await absolutePosition;
+        if (_isDisposed) {
+          return;
+        }
+        _updatePosition(newPosition, absolutePosition: newAbsolutePosition);
+        if (_seekPosition != null && newPosition != null) {
+          final difference =
+              newPosition.inMilliseconds - _seekPosition!.inMilliseconds;
+          if (difference > 0) {
+            _seekPosition = null;
+          }
+        }
+      },
+    );
   }
 
   Future<void> _applyVolume() async {

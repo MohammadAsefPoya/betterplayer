@@ -1,5 +1,6 @@
 ## 0.0.85
 * Fixed Android live HLS playback recovery by intercepting `BehindLiveWindowException` and jumping back to the current live edge instead of surfacing a fatal playback error.
+* Fixed Android Picture-in-Picture play/pause synchronization so native PiP controls now keep player state, controller state, and public event listeners in sync without duplicate play/pause callbacks.
 
 ## 0.0.84
 * [BREAKING_CHANGE] Updated min. Flutter version to 3.3.0 and min. Dart version to 3.0.0.

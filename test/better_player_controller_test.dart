@@ -1,4 +1,5 @@
 import 'package:better_player/better_player.dart';
+import 'package:better_player/src/video_player/video_player_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'better_player_mock_controller.dart';
 import 'better_player_test_utils.dart';
@@ -430,6 +431,68 @@ void main() {
         betterPlayerMockController.startNextVideoTimer();
         await Future.delayed(const Duration(milliseconds: 3000), () {});
         expect(eventCount, 3);
+      });
+
+      test("native pause event should be forwarded to BetterPlayer listeners",
+          () async {
+        final BetterPlayerController betterPlayerController =
+            BetterPlayerTestUtils.setupBetterPlayerMockController();
+        final videoPlayerController =
+            BetterPlayerTestUtils.setupMockVideoPlayerControler();
+        betterPlayerController.videoPlayerController = videoPlayerController;
+
+        await betterPlayerController.setupDataSource(
+          BetterPlayerDataSource.network(
+              BetterPlayerTestUtils.forBiggerBlazesUrl),
+        );
+
+        int pauseEvents = 0;
+        betterPlayerController.addEventsListener((event) {
+          if (event.betterPlayerEventType == BetterPlayerEventType.pause) {
+            pauseEvents += 1;
+          }
+        });
+
+        await videoPlayerController.play();
+        videoPlayerController.videoEventStreamController.add(
+          VideoEvent(eventType: VideoEventType.pause, key: null),
+        );
+
+        await Future.delayed(const Duration(milliseconds: 100), () {});
+
+        expect(pauseEvents, 1);
+        expect(betterPlayerController.isPlaying(), false);
+      });
+
+      test("native play event should be forwarded to BetterPlayer listeners",
+          () async {
+        final BetterPlayerController betterPlayerController =
+            BetterPlayerTestUtils.setupBetterPlayerMockController();
+        final videoPlayerController =
+            BetterPlayerTestUtils.setupMockVideoPlayerControler();
+        betterPlayerController.videoPlayerController = videoPlayerController;
+
+        await betterPlayerController.setupDataSource(
+          BetterPlayerDataSource.network(
+              BetterPlayerTestUtils.forBiggerBlazesUrl),
+        );
+
+        int playEvents = 0;
+        betterPlayerController.addEventsListener((event) {
+          if (event.betterPlayerEventType == BetterPlayerEventType.play) {
+            playEvents += 1;
+          }
+        });
+
+        await videoPlayerController.pause();
+        videoPlayerController.videoEventStreamController.add(
+          VideoEvent(eventType: VideoEventType.play, key: null),
+        );
+
+        await Future.delayed(const Duration(milliseconds: 100), () {});
+
+        expect(playEvents, 1);
+        expect(betterPlayerController.isPlaying(), true);
       });
     },
   );
