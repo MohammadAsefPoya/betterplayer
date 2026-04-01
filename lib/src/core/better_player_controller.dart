@@ -204,6 +204,15 @@ class BetterPlayerController {
   ///Flag which determines whether are ASMS segments loading
   bool _asmsSegmentsLoading = false;
 
+  /// Flag which determines whether ASMS metadata was loaded successfully.
+  bool _asmsDataLoadedSuccessfully = false;
+
+  /// Flag which determines whether ASMS metadata loading is in progress.
+  bool _asmsDataLoadInProgress = false;
+
+  /// Flag which determines whether last ASMS metadata loading attempt failed.
+  bool _asmsDataLoadFailed = false;
+
   ///List of loaded ASMS segments
   final List<String> _asmsSegmentsLoaded = [];
 
@@ -258,6 +267,9 @@ class BetterPlayerController {
     _postControllerEvent(BetterPlayerControllerEvent.setupDataSource);
     _hasCurrentDataSourceStarted = false;
     _hasCurrentDataSourceInitialized = false;
+    _asmsDataLoadedSuccessfully = false;
+    _asmsDataLoadInProgress = false;
+    _asmsDataLoadFailed = false;
     _betterPlayerDataSource = betterPlayerDataSource;
     _betterPlayerSubtitlesSourceList.clear();
 
@@ -271,6 +283,8 @@ class BetterPlayerController {
 
     ///Clear asms tracks
     betterPlayerAsmsTracks.clear();
+    _betterPlayerAsmsAudioTracks = [];
+    _betterPlayerAsmsAudioTrack = null;
 
     ///Setup subtitles
     final List<BetterPlayerSubtitlesSource>? betterPlayerSubtitlesSourceList =
@@ -295,9 +309,14 @@ class BetterPlayerController {
 
   ///Configure subtitles based on subtitles source.
   void _setupSubtitles() {
-    _betterPlayerSubtitlesSourceList.add(
-      BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none),
+    final hasNoneSubtitlesSource = _betterPlayerSubtitlesSourceList.any(
+      (element) => element.type == BetterPlayerSubtitlesSourceType.none,
     );
+    if (!hasNoneSubtitlesSource) {
+      _betterPlayerSubtitlesSourceList.add(
+        BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none),
+      );
+    }
     final defaultSubtitle = _betterPlayerSubtitlesSourceList
         .firstWhereOrNull((element) => element.selectedByDefault == true);
 
@@ -318,24 +337,44 @@ class BetterPlayerController {
   ///This method configures tracks, subtitles and audio tracks from given
   ///master playlist.
   Future _setupAsmsDataSource(BetterPlayerDataSource source) async {
-    final String? data = await BetterPlayerAsmsUtils.getDataFromUrl(
-      betterPlayerDataSource!.url,
-      _getHeaders(),
-    );
-    if (data != null) {
-      final BetterPlayerAsmsDataHolder _response =
-          await BetterPlayerAsmsUtils.parse(data, betterPlayerDataSource!.url);
+    if (_asmsDataLoadedSuccessfully || _asmsDataLoadInProgress) {
+      return _asmsDataLoadedSuccessfully;
+    }
+
+    _asmsDataLoadInProgress = true;
+    _asmsDataLoadFailed = false;
+
+    try {
+      final String? data = await BetterPlayerAsmsUtils.getDataFromUrl(
+        source.url,
+        _getHeaders(),
+      );
+
+      if (data == null) {
+        _asmsDataLoadFailed = true;
+        return false;
+      }
+
+      final BetterPlayerAsmsDataHolder response =
+          await BetterPlayerAsmsUtils.parse(data, source.url);
 
       /// Load tracks
-      if (_betterPlayerDataSource?.useAsmsTracks == true) {
-        _betterPlayerAsmsTracks = _response.tracks ?? [];
+      if (source.useAsmsTracks == true) {
+        _betterPlayerAsmsTracks = response.tracks ?? [];
       }
 
       /// Load subtitles
-      if (betterPlayerDataSource?.useAsmsSubtitles == true) {
+      if (source.useAsmsSubtitles == true) {
+        _betterPlayerSubtitlesSourceList.removeWhere(
+          (element) =>
+              element.asmsIsSegmented != null ||
+              element.asmsSegments != null ||
+              element.asmsSegmentsTime != null,
+        );
+
         final List<BetterPlayerAsmsSubtitle> asmsSubtitles =
-            _response.subtitles ?? [];
-        asmsSubtitles.forEach((BetterPlayerAsmsSubtitle asmsSubtitle) {
+            response.subtitles ?? [];
+        for (final BetterPlayerAsmsSubtitle asmsSubtitle in asmsSubtitles) {
           _betterPlayerSubtitlesSourceList.add(
             BetterPlayerSubtitlesSource(
               type: BetterPlayerSubtitlesSourceType.network,
@@ -348,20 +387,47 @@ class BetterPlayerController {
               selectedByDefault: asmsSubtitle.isDefault,
             ),
           );
-        });
+        }
       }
 
       ///Load audio tracks
-      if (betterPlayerDataSource?.useAsmsAudioTracks == true &&
-          _isDataSourceAsms(betterPlayerDataSource!)) {
-        _betterPlayerAsmsAudioTracks = _response.audios ?? [];
+      if (source.useAsmsAudioTracks == true && _isDataSourceAsms(source)) {
+        _betterPlayerAsmsAudioTracks = response.audios ?? [];
         if (_betterPlayerAsmsAudioTracks?.isNotEmpty == true) {
           setAudioTrack(_betterPlayerAsmsAudioTracks!.first);
         }
       }
 
-      /// ✅ Post custom event when all ASM data has been parsed
+      _asmsDataLoadedSuccessfully = true;
+      _asmsDataLoadFailed = false;
+
+      /// Post custom event only when all ASM data has been parsed successfully.
       _postEvent(BetterPlayerEvent(BetterPlayerEventType.dataLoaded));
+      return true;
+    } catch (exception) {
+      _asmsDataLoadFailed = true;
+      BetterPlayerUtils.log("ASMS metadata load failed: $exception");
+      return false;
+    } finally {
+      _asmsDataLoadInProgress = false;
+    }
+  }
+
+  Future<void> _retryAsmsDataSourceIfNeeded() async {
+    final source = _betterPlayerDataSource;
+    if (source == null || !_isDataSourceAsms(source)) {
+      return;
+    }
+    if (_asmsDataLoadedSuccessfully ||
+        _asmsDataLoadInProgress ||
+        !_asmsDataLoadFailed) {
+      return;
+    }
+
+    final bool loaded = await _setupAsmsDataSource(source) == true;
+    if (loaded) {
+      _setupSubtitles();
+      _postControllerEvent(BetterPlayerControllerEvent.changeSubtitles);
     }
   }
 
@@ -1195,6 +1261,7 @@ class BetterPlayerController {
         break;
       case VideoEventType.bufferingEnd:
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.bufferingEnd));
+        _retryAsmsDataSourceIfNeeded();
         break;
       case VideoEventType.videoSizeChanged:
         final size = event.size;
@@ -1214,6 +1281,10 @@ class BetterPlayerController {
 
         ///TODO: Handle when needed
         break;
+    }
+
+    if (event.eventType == VideoEventType.initialized) {
+      _retryAsmsDataSourceIfNeeded();
     }
   }
 
