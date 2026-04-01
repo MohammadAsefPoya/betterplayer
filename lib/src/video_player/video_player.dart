@@ -15,6 +15,8 @@ final VideoPlayerPlatform _videoPlayerPlatform = VideoPlayerPlatform.instance
 // performed.
   ..init();
 
+const Object _videoPlayerValueUnset = Object();
+
 /// The duration, current position, buffering state, error state and settings
 /// of a [VideoPlayerController].
 class VideoPlayerValue {
@@ -119,7 +121,7 @@ class VideoPlayerValue {
     bool? isLooping,
     bool? isBuffering,
     double? volume,
-    String? errorDescription,
+    Object? errorDescription = _videoPlayerValueUnset,
     double? speed,
     bool? isPip,
   }) {
@@ -134,7 +136,9 @@ class VideoPlayerValue {
       isBuffering: isBuffering ?? this.isBuffering,
       volume: volume ?? this.volume,
       speed: speed ?? this.speed,
-      errorDescription: errorDescription ?? this.errorDescription,
+      errorDescription: identical(errorDescription, _videoPlayerValueUnset)
+          ? this.errorDescription
+          : errorDescription as String?,
       isPip: isPip ?? this.isPip,
     );
   }
@@ -217,6 +221,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           value = value.copyWith(
             duration: event.duration,
             size: event.size,
+            errorDescription: null,
           );
           _initializingCompleter.complete(null);
           _applyPlayPause();
@@ -233,11 +238,12 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           break;
         case VideoEventType.bufferingEnd:
           if (value.isBuffering) {
-            value = value.copyWith(isBuffering: false);
+            value = value.copyWith(isBuffering: false, errorDescription: null);
           }
           break;
 
         case VideoEventType.play:
+          value = value.copyWith(errorDescription: null);
           _updatePlayingStateFromEvent(true);
           break;
         case VideoEventType.pause:
@@ -264,7 +270,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         final PlatformException e = object;
         value = value.copyWith(errorDescription: e.message);
       } else {
-        value.copyWith(errorDescription: object.toString());
+        value = value.copyWith(errorDescription: object.toString());
       }
       _timer?.cancel();
       if (!_initializingCompleter.isCompleted) {

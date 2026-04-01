@@ -62,6 +62,7 @@ import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import com.google.android.exoplayer2.source.BehindLiveWindowException
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
+import com.google.android.exoplayer2.upstream.HttpDataSource
 import com.google.android.exoplayer2.upstream.DataSource
 import com.google.android.exoplayer2.upstream.DefaultDataSource
 import com.google.android.exoplayer2.util.Util
@@ -104,6 +105,11 @@ internal class BetterPlayer(
     private var behindLiveWindowRecoveryAttempts = 0
     private var lastBehindLiveWindowRecoveryTimestampMs = 0L
     private var lastKnownIsPlaying: Boolean? = null
+    private var pendingRecoverableNetworkError = false
+    private var shouldResumeAfterRecoverableError = false
+    private var lastKnownPlaybackPositionMs = 0L
+    private var recoverableErrorHandler: Handler? = null
+    private var recoverableErrorRunnable: Runnable? = null
 
     init {
         val loadBuilder = DefaultLoadControl.Builder()
@@ -155,6 +161,10 @@ internal class BetterPlayer(
     ) {
         this.key = key
         isInitialized = false
+        pendingRecoverableNetworkError = false
+        shouldResumeAfterRecoverableError = false
+        lastKnownPlaybackPositionMs = 0L
+        stopRecoverableErrorRecoveryLoop()
         val uri = Uri.parse(dataSource)
         var dataSourceFactory: DataSource.Factory?
         val userAgent = getUserAgent(headers)
@@ -495,6 +505,8 @@ internal class BetterPlayer(
                     }
                     Player.STATE_READY -> {
                         behindLiveWindowRecoveryAttempts = 0
+                        pendingRecoverableNetworkError = false
+                        stopRecoverableErrorRecoveryLoop()
                         if (!isInitialized) {
                             isInitialized = true
                             sendInitialized()
@@ -518,6 +530,13 @@ internal class BetterPlayer(
             override fun onPlayerError(error: PlaybackException) {
                 if (shouldRecoverFromBehindLiveWindow(error) && recoverFromBehindLiveWindow()) {
                     return
+                }
+                if (shouldRecoverFromConnectivityLoss(error)) {
+                    lastKnownPlaybackPositionMs = exoPlayer?.currentPosition ?: 0L
+                    shouldResumeAfterRecoverableError =
+                        exoPlayer?.playWhenReady == true || lastKnownIsPlaying == true
+                    pendingRecoverableNetworkError = true
+                    startRecoverableErrorRecoveryLoop()
                 }
                 eventSink.error("VideoError", "Video player had error $error", "")
             }
@@ -557,10 +576,18 @@ internal class BetterPlayer(
     }
 
     fun play() {
+        if (pendingRecoverableNetworkError) {
+            shouldResumeAfterRecoverableError = true
+            if (recoverFromConnectivityLoss()) {
+                return
+            }
+        }
         exoPlayer?.playWhenReady = true
     }
 
     fun pause() {
+        shouldResumeAfterRecoverableError = false
+        stopRecoverableErrorRecoveryLoop()
         exoPlayer?.playWhenReady = false
     }
 
@@ -607,6 +634,11 @@ internal class BetterPlayer(
     }
 
     fun seekTo(location: Int) {
+        lastKnownPlaybackPositionMs = location.toLong()
+        if (pendingRecoverableNetworkError) {
+            recoverFromConnectivityLoss(positionMs = location.toLong(), forceResume = null)
+            return
+        }
         exoPlayer?.seekTo(location.toLong())
     }
 
@@ -664,6 +696,96 @@ internal class BetterPlayer(
         }
 
         return false
+    }
+
+    private fun shouldRecoverFromConnectivityLoss(error: PlaybackException): Boolean {
+        if (currentMediaSource == null) {
+            return false
+        }
+
+        if (currentContentType != C.TYPE_HLS &&
+            currentContentType != C.TYPE_DASH &&
+            currentContentType != C.TYPE_OTHER
+        ) {
+            return false
+        }
+
+        if (error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        ) {
+            return true
+        }
+
+        var currentCause: Throwable? = error.cause
+        while (currentCause != null) {
+            if (currentCause is HttpDataSource.HttpDataSourceException ||
+                currentCause is java.net.SocketTimeoutException ||
+                currentCause is java.net.UnknownHostException ||
+                currentCause is java.net.ConnectException
+            ) {
+                return true
+            }
+            currentCause = currentCause.cause
+        }
+
+        return false
+    }
+
+    private fun startRecoverableErrorRecoveryLoop() {
+        if (recoverableErrorHandler == null) {
+            recoverableErrorHandler = Handler(Looper.getMainLooper())
+        }
+        if (recoverableErrorRunnable != null) {
+            return
+        }
+        recoverableErrorRunnable = object : Runnable {
+            override fun run() {
+                if (!pendingRecoverableNetworkError) {
+                    stopRecoverableErrorRecoveryLoop()
+                    return
+                }
+                recoverFromConnectivityLoss()
+                recoverableErrorHandler?.postDelayed(this, RECOVERABLE_ERROR_RETRY_DELAY_MS)
+            }
+        }
+        recoverableErrorHandler?.postDelayed(
+            recoverableErrorRunnable!!,
+            RECOVERABLE_ERROR_RETRY_DELAY_MS
+        )
+    }
+
+    private fun stopRecoverableErrorRecoveryLoop() {
+        recoverableErrorRunnable?.let { runnable ->
+            recoverableErrorHandler?.removeCallbacks(runnable)
+        }
+        recoverableErrorRunnable = null
+    }
+
+    private fun recoverFromConnectivityLoss(
+        positionMs: Long? = null,
+        forceResume: Boolean? = null
+    ): Boolean {
+        val player = exoPlayer ?: return false
+        val mediaSource = currentMediaSource ?: return false
+
+        val resumePlayback = forceResume ?: shouldResumeAfterRecoverableError
+        val targetPosition = positionMs ?: lastKnownPlaybackPositionMs
+
+        Log.w(TAG, "Attempting to recover from connectivity loss")
+        pendingRecoverableNetworkError = true
+        player.setMediaSource(mediaSource, false)
+        player.prepare()
+
+        if (player.isCurrentMediaItemLive) {
+            player.seekToDefaultPosition()
+        } else {
+            player.seekTo(max(0L, targetPosition))
+        }
+
+        player.playWhenReady = resumePlayback
+        return true
     }
 
     private fun recoverFromBehindLiveWindow(): Boolean {
@@ -825,6 +947,8 @@ internal class BetterPlayer(
     }
 
     fun dispose() {
+        stopRecoverableErrorRecoveryLoop()
+        recoverableErrorHandler = null
         disposeMediaSession()
         disposeRemoteNotifications()
         playbackEventListener?.let { listener ->
@@ -864,6 +988,7 @@ internal class BetterPlayer(
         private const val NOTIFICATION_ID = 20772077
         private const val MAX_BEHIND_LIVE_WINDOW_RECOVERY_ATTEMPTS = 3
         private const val BEHIND_LIVE_WINDOW_RECOVERY_WINDOW_MS = 30_000L
+        private const val RECOVERABLE_ERROR_RETRY_DELAY_MS = 2_000L
 
         //Clear cache without accessing BetterPlayerCache.
         fun clearCache(context: Context?, result: MethodChannel.Result) {
