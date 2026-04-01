@@ -110,6 +110,9 @@ internal class BetterPlayer(
     private var lastKnownPlaybackPositionMs = 0L
     private var recoverableErrorHandler: Handler? = null
     private var recoverableErrorRunnable: Runnable? = null
+    private var bufferingTimeoutHandler: Handler? = null
+    private var bufferingTimeoutRunnable: Runnable? = null
+    private var hasSentBufferingStallError = false
 
     init {
         val loadBuilder = DefaultLoadControl.Builder()
@@ -164,7 +167,9 @@ internal class BetterPlayer(
         pendingRecoverableNetworkError = false
         shouldResumeAfterRecoverableError = false
         lastKnownPlaybackPositionMs = 0L
+        hasSentBufferingStallError = false
         stopRecoverableErrorRecoveryLoop()
+        stopBufferingTimeoutWatchdog()
         val uri = Uri.parse(dataSource)
         var dataSourceFactory: DataSource.Factory?
         val userAgent = getUserAgent(headers)
@@ -498,6 +503,7 @@ internal class BetterPlayer(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
+                        startBufferingTimeoutWatchdog()
                         sendBufferingUpdate(true)
                         val event: MutableMap<String, Any> = HashMap()
                         event["event"] = "bufferingStart"
@@ -506,7 +512,9 @@ internal class BetterPlayer(
                     Player.STATE_READY -> {
                         behindLiveWindowRecoveryAttempts = 0
                         pendingRecoverableNetworkError = false
+                        hasSentBufferingStallError = false
                         stopRecoverableErrorRecoveryLoop()
+                        stopBufferingTimeoutWatchdog()
                         if (!isInitialized) {
                             isInitialized = true
                             sendInitialized()
@@ -516,13 +524,14 @@ internal class BetterPlayer(
                         eventSink.success(event)
                     }
                     Player.STATE_ENDED -> {
+                        stopBufferingTimeoutWatchdog()
                         val event: MutableMap<String, Any?> = HashMap()
                         event["event"] = "completed"
                         event["key"] = key
                         eventSink.success(event)
                     }
                     Player.STATE_IDLE -> {
-                        //no-op
+                        stopBufferingTimeoutWatchdog()
                     }
                 }
             }
@@ -536,6 +545,7 @@ internal class BetterPlayer(
                     shouldResumeAfterRecoverableError =
                         exoPlayer?.playWhenReady == true || lastKnownIsPlaying == true
                     pendingRecoverableNetworkError = true
+                    hasSentBufferingStallError = true
                     startRecoverableErrorRecoveryLoop()
                 }
                 eventSink.error("VideoError", "Video player had error $error", "")
@@ -588,6 +598,7 @@ internal class BetterPlayer(
     fun pause() {
         shouldResumeAfterRecoverableError = false
         stopRecoverableErrorRecoveryLoop()
+        stopBufferingTimeoutWatchdog()
         exoPlayer?.playWhenReady = false
     }
 
@@ -754,6 +765,46 @@ internal class BetterPlayer(
             recoverableErrorRunnable!!,
             RECOVERABLE_ERROR_RETRY_DELAY_MS
         )
+    }
+
+    private fun startBufferingTimeoutWatchdog() {
+        if (bufferingTimeoutHandler == null) {
+            bufferingTimeoutHandler = Handler(Looper.getMainLooper())
+        }
+        stopBufferingTimeoutWatchdog()
+        bufferingTimeoutRunnable = Runnable {
+            val player = exoPlayer ?: return@Runnable
+            if (player.playbackState != Player.STATE_BUFFERING || !isInitialized) {
+                return@Runnable
+            }
+
+            val playbackPosition = player.currentPosition
+            lastKnownPlaybackPositionMs = playbackPosition
+            pendingRecoverableNetworkError = true
+            shouldResumeAfterRecoverableError =
+                player.playWhenReady || lastKnownIsPlaying == true
+            startRecoverableErrorRecoveryLoop()
+
+            if (!hasSentBufferingStallError) {
+                hasSentBufferingStallError = true
+                eventSink.error(
+                    "VideoError",
+                    "Video player stalled while buffering. Possible network connection loss.",
+                    ""
+                )
+            }
+        }
+        bufferingTimeoutHandler?.postDelayed(
+            bufferingTimeoutRunnable!!,
+            BUFFERING_STALL_TIMEOUT_MS
+        )
+    }
+
+    private fun stopBufferingTimeoutWatchdog() {
+        bufferingTimeoutRunnable?.let { runnable ->
+            bufferingTimeoutHandler?.removeCallbacks(runnable)
+        }
+        bufferingTimeoutRunnable = null
     }
 
     private fun stopRecoverableErrorRecoveryLoop() {
@@ -949,6 +1000,8 @@ internal class BetterPlayer(
     fun dispose() {
         stopRecoverableErrorRecoveryLoop()
         recoverableErrorHandler = null
+        stopBufferingTimeoutWatchdog()
+        bufferingTimeoutHandler = null
         disposeMediaSession()
         disposeRemoteNotifications()
         playbackEventListener?.let { listener ->
@@ -989,6 +1042,7 @@ internal class BetterPlayer(
         private const val MAX_BEHIND_LIVE_WINDOW_RECOVERY_ATTEMPTS = 3
         private const val BEHIND_LIVE_WINDOW_RECOVERY_WINDOW_MS = 30_000L
         private const val RECOVERABLE_ERROR_RETRY_DELAY_MS = 2_000L
+        private const val BUFFERING_STALL_TIMEOUT_MS = 8_000L
 
         //Clear cache without accessing BetterPlayerCache.
         fun clearCache(context: Context?, result: MethodChannel.Result) {

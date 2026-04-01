@@ -3,6 +3,7 @@
 * Fixed Android Picture-in-Picture play/pause synchronization so native PiP controls now keep player state, controller state, and public event listeners in sync without duplicate play/pause callbacks.
 * Fixed ASMS/HLS metadata loading reliability by retrying failed playlist metadata fetches after player initialization and buffering end, while only firing `dataLoaded` after metadata is fetched successfully.
 * Fixed Android network-loss playback recovery by retrying recoverable connectivity errors, restoring playback when the connection returns, and clearing stale error state after successful recovery.
+* Fixed Android connection-loss reporting so long buffering stalls now surface an exception event instead of silently hanging forever in buffering state.
 
 ## 0.0.84
 * [BREAKING_CHANGE] Updated min. Flutter version to 3.3.0 and min. Dart version to 3.0.0.
