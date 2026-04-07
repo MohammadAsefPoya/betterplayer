@@ -181,9 +181,9 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
       'setTrackParameters',
       <String, dynamic>{
         'textureId': textureId,
-        'width': width,
-        'height': height,
-        'bitrate': bitrate,
+        'width': width ?? 0,
+        'height': height ?? 0,
+        'bitrate': bitrate ?? 0,
       },
     );
   }
