@@ -508,6 +508,12 @@ internal class BetterPlayer(
             exoPlayer?.addListener(listener)
         }
         exoPlayer?.addListener(object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) {
+                if (hasManualTrackSelection) {
+                    applySelectedTrackParameters()
+                }
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
@@ -843,23 +849,83 @@ internal class BetterPlayer(
 
     private fun applySelectedTrackParameters() {
         val parametersBuilder = trackSelector.buildUponParameters()
-        if (hasManualTrackSelection) {
-            if (selectedTrackWidth != 0 && selectedTrackHeight != 0) {
-                parametersBuilder.setMaxVideoSize(selectedTrackWidth, selectedTrackHeight)
-            } else {
-                parametersBuilder.clearVideoSizeConstraints()
-            }
+        val mappedTrackInfo = trackSelector.currentMappedTrackInfo
+        val videoRendererIndex = findVideoRendererIndex(mappedTrackInfo)
 
-            if (selectedTrackBitrate != 0) {
-                parametersBuilder.setMaxVideoBitrate(selectedTrackBitrate)
-            } else {
-                parametersBuilder.setMaxVideoBitrate(Int.MAX_VALUE)
+        parametersBuilder.clearVideoSizeConstraints()
+        parametersBuilder.setMaxVideoBitrate(Int.MAX_VALUE)
+
+        if (videoRendererIndex != null) {
+            parametersBuilder.setRendererDisabled(videoRendererIndex, false)
+            parametersBuilder.clearSelectionOverrides(videoRendererIndex)
+
+            if (hasManualTrackSelection && mappedTrackInfo != null) {
+                val videoTrackGroups = mappedTrackInfo.getTrackGroups(videoRendererIndex)
+                val selectionOverride = findVideoSelectionOverride(videoTrackGroups)
+                if (selectionOverride != null) {
+                    parametersBuilder.setSelectionOverride(
+                        videoRendererIndex,
+                        videoTrackGroups,
+                        selectionOverride
+                    )
+                } else {
+                    Log.w(
+                        TAG,
+                        "Couldn't resolve selected video track for width=$selectedTrackWidth, height=$selectedTrackHeight, bitrate=$selectedTrackBitrate"
+                    )
+                }
             }
-        } else {
-            parametersBuilder.clearVideoSizeConstraints()
-            parametersBuilder.setMaxVideoBitrate(Int.MAX_VALUE)
         }
+
         trackSelector.setParameters(parametersBuilder)
+    }
+
+    private fun findVideoRendererIndex(
+        mappedTrackInfo: DefaultTrackSelector.MappedTrackInfo?
+    ): Int? {
+        if (mappedTrackInfo == null) {
+            return null
+        }
+
+        for (rendererIndex in 0 until mappedTrackInfo.rendererCount) {
+            if (mappedTrackInfo.getRendererType(rendererIndex) == C.TRACK_TYPE_VIDEO) {
+                return rendererIndex
+            }
+        }
+
+        return null
+    }
+
+    private fun findVideoSelectionOverride(
+        trackGroups: TrackGroupArray
+    ): SelectionOverride? {
+        for (groupIndex in 0 until trackGroups.length) {
+            val trackGroup = trackGroups.get(groupIndex)
+            for (trackIndex in 0 until trackGroup.length) {
+                val format = trackGroup.getFormat(trackIndex)
+                if (doesFormatMatchSelectedTrack(format)) {
+                    return SelectionOverride(groupIndex, trackIndex)
+                }
+            }
+        }
+
+        return null
+    }
+
+    private fun doesFormatMatchSelectedTrack(format: Format): Boolean {
+        if (selectedTrackWidth != 0 && format.width != selectedTrackWidth) {
+            return false
+        }
+
+        if (selectedTrackHeight != 0 && format.height != selectedTrackHeight) {
+            return false
+        }
+
+        if (selectedTrackBitrate != 0 && format.bitrate != selectedTrackBitrate) {
+            return false
+        }
+
+        return true
     }
 
     private fun recoverFromBehindLiveWindow(): Boolean {
