@@ -61,7 +61,6 @@ import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.drm.DrmSessionManagerProvider
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import com.google.android.exoplayer2.source.BehindLiveWindowException
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector.SelectionOverride
 import com.google.android.exoplayer2.trackselection.TrackSelectionOverrides
 import com.google.android.exoplayer2.upstream.HttpDataSource
 import com.google.android.exoplayer2.upstream.DataSource
@@ -858,16 +857,21 @@ internal class BetterPlayer(
 
         if (videoRendererIndex != null) {
             parametersBuilder.setRendererDisabled(videoRendererIndex, false)
-            parametersBuilder.clearSelectionOverrides(videoRendererIndex)
+            parametersBuilder.setTrackSelectionOverrides(
+                TrackSelectionOverrides.Builder()
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .build()
+            )
 
             if (hasManualTrackSelection && mappedTrackInfo != null) {
                 val videoTrackGroups = mappedTrackInfo.getTrackGroups(videoRendererIndex)
                 val selectionOverride = findVideoSelectionOverride(videoTrackGroups)
                 if (selectionOverride != null) {
-                    parametersBuilder.setSelectionOverride(
-                        videoRendererIndex,
-                        videoTrackGroups,
-                        selectionOverride
+                    parametersBuilder.setTrackSelectionOverrides(
+                        TrackSelectionOverrides.Builder()
+                            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                            .addOverride(selectionOverride)
+                            .build()
                     )
                 } else {
                     Log.w(
@@ -899,13 +903,16 @@ internal class BetterPlayer(
 
     private fun findVideoSelectionOverride(
         trackGroups: TrackGroupArray
-    ): SelectionOverride? {
+    ): TrackSelectionOverrides.TrackSelectionOverride? {
         for (groupIndex in 0 until trackGroups.length) {
             val trackGroup = trackGroups.get(groupIndex)
             for (trackIndex in 0 until trackGroup.length) {
                 val format = trackGroup.getFormat(trackIndex)
                 if (doesFormatMatchSelectedTrack(format)) {
-                    return SelectionOverride(groupIndex, trackIndex)
+                    return TrackSelectionOverrides.TrackSelectionOverride(
+                        trackGroup,
+                        listOf(trackIndex)
+                    )
                 }
             }
         }
