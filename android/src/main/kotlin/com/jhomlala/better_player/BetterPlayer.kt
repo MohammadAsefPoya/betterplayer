@@ -113,6 +113,10 @@ internal class BetterPlayer(
     private var bufferingTimeoutHandler: Handler? = null
     private var bufferingTimeoutRunnable: Runnable? = null
     private var hasSentBufferingStallError = false
+    private var selectedTrackWidth = 0
+    private var selectedTrackHeight = 0
+    private var selectedTrackBitrate = 0
+    private var hasManualTrackSelection = false
 
     init {
         val loadBuilder = DefaultLoadControl.Builder()
@@ -168,6 +172,10 @@ internal class BetterPlayer(
         shouldResumeAfterRecoverableError = false
         lastKnownPlaybackPositionMs = 0L
         hasSentBufferingStallError = false
+        selectedTrackWidth = 0
+        selectedTrackHeight = 0
+        selectedTrackBitrate = 0
+        hasManualTrackSelection = false
         stopRecoverableErrorRecoveryLoop()
         stopBufferingTimeoutWatchdog()
         val uri = Uri.parse(dataSource)
@@ -630,18 +638,11 @@ internal class BetterPlayer(
     }
 
     fun setTrackParameters(width: Int, height: Int, bitrate: Int) {
-        val parametersBuilder = trackSelector.buildUponParameters()
-        if (width != 0 && height != 0) {
-            parametersBuilder.setMaxVideoSize(width, height)
-        }
-        if (bitrate != 0) {
-            parametersBuilder.setMaxVideoBitrate(bitrate)
-        }
-        if (width == 0 && height == 0 && bitrate == 0) {
-            parametersBuilder.clearVideoSizeConstraints()
-            parametersBuilder.setMaxVideoBitrate(Int.MAX_VALUE)
-        }
-        trackSelector.setParameters(parametersBuilder)
+        selectedTrackWidth = width
+        selectedTrackHeight = height
+        selectedTrackBitrate = bitrate
+        hasManualTrackSelection = width != 0 || height != 0 || bitrate != 0
+        applySelectedTrackParameters()
     }
 
     fun seekTo(location: Int) {
@@ -828,6 +829,7 @@ internal class BetterPlayer(
         pendingRecoverableNetworkError = true
         player.setMediaSource(mediaSource, false)
         player.prepare()
+        applySelectedTrackParameters()
 
         if (player.isCurrentMediaItemLive) {
             player.seekToDefaultPosition()
@@ -837,6 +839,27 @@ internal class BetterPlayer(
 
         player.playWhenReady = resumePlayback
         return true
+    }
+
+    private fun applySelectedTrackParameters() {
+        val parametersBuilder = trackSelector.buildUponParameters()
+        if (hasManualTrackSelection) {
+            if (selectedTrackWidth != 0 && selectedTrackHeight != 0) {
+                parametersBuilder.setMaxVideoSize(selectedTrackWidth, selectedTrackHeight)
+            } else {
+                parametersBuilder.clearVideoSizeConstraints()
+            }
+
+            if (selectedTrackBitrate != 0) {
+                parametersBuilder.setMaxVideoBitrate(selectedTrackBitrate)
+            } else {
+                parametersBuilder.setMaxVideoBitrate(Int.MAX_VALUE)
+            }
+        } else {
+            parametersBuilder.clearVideoSizeConstraints()
+            parametersBuilder.setMaxVideoBitrate(Int.MAX_VALUE)
+        }
+        trackSelector.setParameters(parametersBuilder)
     }
 
     private fun recoverFromBehindLiveWindow(): Boolean {
@@ -861,6 +884,7 @@ internal class BetterPlayer(
         Log.w(TAG, "Recovering from BehindLiveWindowException by seeking to live edge")
         player.setMediaSource(mediaSource, true)
         player.prepare()
+        applySelectedTrackParameters()
         player.seekToDefaultPosition()
         player.playWhenReady = shouldResumePlayback
         return true
