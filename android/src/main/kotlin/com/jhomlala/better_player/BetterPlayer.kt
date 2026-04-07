@@ -508,7 +508,8 @@ internal class BetterPlayer(
             exoPlayer?.addListener(listener)
         }
         exoPlayer?.addListener(object : Player.Listener {
-            override fun onTracksChanged(tracks: Tracks) {
+            @Suppress("DEPRECATION")
+            override fun onTracksChanged(trackGroups: TrackGroupArray, trackSelections: com.google.android.exoplayer2.trackselection.TrackSelectionArray) {
                 if (hasManualTrackSelection) {
                     applySelectedTrackParameters()
                 }
@@ -886,7 +887,7 @@ internal class BetterPlayer(
     }
 
     private fun findVideoRendererIndex(
-        mappedTrackInfo: DefaultTrackSelector.MappedTrackInfo?
+        mappedTrackInfo: com.google.android.exoplayer2.trackselection.MappingTrackSelector.MappedTrackInfo?
     ): Int? {
         if (mappedTrackInfo == null) {
             return null
