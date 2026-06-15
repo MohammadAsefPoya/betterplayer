@@ -5,6 +5,11 @@ Requirements:
 * iOS: iOS version greater than 14.0
 * Android: Android version greater than 8.0, enough RAM, v2 Flutter android embedding
 
+Additional iOS requirements:
+* Enable the **Background Modes** capability for your app.
+* Add `audio` to `UIBackgroundModes` in `Info.plist` so video/audio playback can continue when PiP starts.
+* PiP should be started from a visible Better Player instance with a valid on-screen size.
+
 Each OS provides method to check if given device supports PiP. If device doesn't support PiP, then
 error will be printed in console.
 
@@ -44,6 +49,9 @@ PiP menu item is enabled as default in both Material and Cuperino controls. You 
 Warning:
 Both Android and iOS PiP versions are in very early stage. There can be bugs and small issues. Please
 make sure that you've checked state of the PiP in Better Player before moving it to the production.
+
+For iOS, PiP behavior can vary by device class and iOS version. Always verify PiP on both **iPhone** and
+**iPad**, especially on newer iOS releases.
 
 Known limitations:
 Android: When PiP is enabled, Better Player will open full screen mode to play video correctly. When
