@@ -1118,6 +1118,9 @@ class BetterPlayerController {
         }
       }
       if (appLifecycleState == AppLifecycleState.paused) {
+        if (Platform.isIOS && (videoPlayerController?.value.isPip ?? false)) {
+          return;
+        }
         _wasPlayingBeforePause ??= isPlaying();
         pause();
       }
