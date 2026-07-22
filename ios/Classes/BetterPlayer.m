@@ -755,7 +755,10 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
     self.restoreUserInterfaceForPIPStopCompletionHandler = completionHandler;
-    [self setRestoreUserInterfaceForPIPStopCompletionHandler: true];
+    if (self.restoreUserInterfaceForPIPStopCompletionHandler != NULL) {
+        self.restoreUserInterfaceForPIPStopCompletionHandler(YES);
+        self.restoreUserInterfaceForPIPStopCompletionHandler = NULL;
+    }
 }
 
 - (void) setAudioTrack:(NSString*) name index:(int) index{
