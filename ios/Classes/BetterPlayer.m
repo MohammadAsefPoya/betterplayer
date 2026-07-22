@@ -18,6 +18,8 @@ static void* presentationSizeContext = &presentationSizeContext;
 @property(nonatomic, strong) BetterPlayerView *playerView;
 @property(nonatomic, copy) void (^restoreUserInterfaceForPIPStopCompletionHandler)(BOOL);
 @property(nonatomic, strong) AVPictureInPictureController *pipController API_AVAILABLE(ios(9.0));
+@property(nonatomic, assign) BOOL isRestoringUserInterfaceForPipStop;
+@property(nonatomic, assign) BOOL shouldCleanupPipLayerAfterRestore;
 #endif
 @end
 
@@ -655,6 +657,11 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)cleanupPipLayerIfNeeded {
+    if (self.isRestoringUserInterfaceForPipStop) {
+        self.shouldCleanupPipLayerAfterRestore = YES;
+        return;
+    }
+
     if (self._playerLayer != nil && self._playerLayer != self.playerView.playerLayer) {
         [self._playerLayer removeFromSuperlayer];
     }
@@ -790,7 +797,11 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 #if TARGET_OS_IOS
 - (void)pictureInPictureControllerDidStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController  API_AVAILABLE(ios(9.0)){
-    [self cleanupPipLayerIfNeeded];
+    if (!self.isRestoringUserInterfaceForPipStop) {
+        [self cleanupPipLayerIfNeeded];
+    } else {
+        self.shouldCleanupPipLayerAfterRestore = YES;
+    }
     [self sendPipStopEvent];
 }
 
@@ -801,7 +812,7 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)pictureInPictureControllerWillStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController  API_AVAILABLE(ios(9.0)){
-
+    self.shouldCleanupPipLayerAfterRestore = YES;
 }
 
 - (void)pictureInPictureControllerWillStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
@@ -821,9 +832,15 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
     self.restoreUserInterfaceForPIPStopCompletionHandler = completionHandler;
+    self.isRestoringUserInterfaceForPipStop = YES;
     if (self.restoreUserInterfaceForPIPStopCompletionHandler != NULL) {
         self.restoreUserInterfaceForPIPStopCompletionHandler(YES);
         self.restoreUserInterfaceForPIPStopCompletionHandler = NULL;
+    }
+    self.isRestoringUserInterfaceForPipStop = NO;
+    if (self.shouldCleanupPipLayerAfterRestore) {
+        self.shouldCleanupPipLayerAfterRestore = NO;
+        [self cleanupPipLayerIfNeeded];
     }
 }
 
