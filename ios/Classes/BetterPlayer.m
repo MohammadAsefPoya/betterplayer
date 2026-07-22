@@ -604,6 +604,14 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 #if TARGET_OS_IOS
+- (void)sendPipErrorWithCode:(NSString *)code message:(NSString *)message details:(id)details {
+    if (_eventSink != nil) {
+        _eventSink([FlutterError errorWithCode:code
+                                       message:message
+                                       details:details]);
+    }
+}
+
 - (void)setRestoreUserInterfaceForPIPStopCompletionHandler:(BOOL)restore
 {
     if (self.restoreUserInterfaceForPIPStopCompletionHandler != NULL) {
@@ -657,11 +665,29 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 - (void)setupPipController:(AVPlayerLayer *)playerLayer {
     if (@available(iOS 9.0, *)) {
         if (playerLayer == nil || ![AVPictureInPictureController isPictureInPictureSupported]) {
+            if (playerLayer == nil) {
+                [self sendPipErrorWithCode:@"PIP_SETUP_ERROR"
+                                   message:@"Picture in Picture could not start because no valid AVPlayerLayer was found."
+                                   details:nil];
+            }
             return;
         }
 
+        NSError *audioCategoryError = nil;
+        NSError *audioActiveError = nil;
+        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:&audioCategoryError];
         [[AVAudioSession sharedInstance] setActive: YES error: nil];
+        [[AVAudioSession sharedInstance] setActive:YES error:&audioActiveError];
         [[UIApplication sharedApplication] beginReceivingRemoteControlEvents];
+
+        if (audioCategoryError != nil || audioActiveError != nil) {
+            [self sendPipErrorWithCode:@"PIP_AUDIO_SESSION_ERROR"
+                               message:@"Picture in Picture audio session setup failed."
+                               details:@{
+                                   @"categoryError" : audioCategoryError.localizedDescription ?: [NSNull null],
+                                   @"activationError" : audioActiveError.localizedDescription ?: [NSNull null]
+                               }];
+        }
 
         if (self.pipController != nil && self._playerLayer != playerLayer) {
             self.pipController.delegate = nil;
@@ -669,9 +695,14 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
         }
 
         self._playerLayer = playerLayer;
+        self._playerLayer.player = _player;
+        self._playerLayer.needsDisplayOnBoundsChange = YES;
         if (self.pipController == nil) {
             self.pipController = [[AVPictureInPictureController alloc] initWithPlayerLayer:playerLayer];
             self.pipController.delegate = self;
+            if (@available(iOS 14.2, *)) {
+                self.pipController.canStartPictureInPictureAutomaticallyFromInline = YES;
+            }
         }
     } else {
         // Fallback on earlier versions
@@ -680,11 +711,28 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void) enablePictureInPicture: (CGRect) frame{
     if (_player == nil) {
+        [self sendPipErrorWithCode:@"PIP_PLAYER_ERROR"
+                           message:@"Picture in Picture could not start because the AVPlayer is not available."
+                           details:nil];
+        return;
+    }
+
+    if (_player.currentItem == nil) {
+        [self sendPipErrorWithCode:@"PIP_PLAYER_ITEM_ERROR"
+                           message:@"Picture in Picture could not start because no AVPlayerItem is loaded yet."
+                           details:nil];
+        return;
+    }
+
+    if (_player.currentItem.status != AVPlayerItemStatusReadyToPlay) {
+        [self sendPipErrorWithCode:@"PIP_NOT_READY"
+                           message:@"Picture in Picture can only start after the player item is ready to play."
+                           details:@{ @"status" : @(_player.currentItem.status) }];
         return;
     }
 
     AVPlayerLayer *sourcePlayerLayer = nil;
-    if (self.playerView != nil && self.playerView.window != nil) {
+    if (self.playerView != nil && self.playerView.window != nil && !self.playerView.isHidden) {
         [self.playerView layoutIfNeeded];
         sourcePlayerLayer = self.playerView.playerLayer;
     } else {
@@ -702,8 +750,19 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     }
 
     [self setupPipController:sourcePlayerLayer];
+    if (self.pipController == nil) {
+        [self sendPipErrorWithCode:@"PIP_CONTROLLER_ERROR"
+                           message:@"Picture in Picture controller could not be created."
+                           details:nil];
+        return;
+    }
+
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
+        if (!self->_isPlaying && self->_player.rate == 0) {
+            [self->_player play];
+            self->_player.rate = self->_playerRate;
+        }
         [self setPictureInPicture:true];
     });
 }
@@ -751,6 +810,13 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
 
 - (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController failedToStartPictureInPictureWithError:(NSError *)error {
     [self cleanupPipLayerIfNeeded];
+    [self sendPipErrorWithCode:@"PIP_START_FAILED"
+                       message:error.localizedDescription ?: @"Picture in Picture failed to start."
+                       details:@{
+                           @"domain" : error.domain ?: @"",
+                           @"code" : @(error.code),
+                           @"description" : error.localizedDescription ?: @""
+                       }];
 }
 
 - (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
