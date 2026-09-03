@@ -19,6 +19,7 @@
     * [Translations configuration](translationsconfiguration.md)
 * Additional features
     * [Events](events.md)
+    * [Network & chunk logs](network_logs.md)
     * [Player behavior on visibility change](playerbehavioronvisibilitychange.md)
     * [Resolutions of video](resolutionsofvideo.md)
     * [Custom element in overflow menu](customelementinoverflowmenu.md)

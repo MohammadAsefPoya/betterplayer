@@ -17,6 +17,7 @@ import 'package:example/pages/hls_audio_page.dart';
 import 'package:example/pages/hls_subtitles_page.dart';
 import 'package:example/pages/hls_tracks_page.dart';
 import 'package:example/pages/memory_player_page.dart';
+import 'package:example/pages/network_logs_page.dart';
 import 'package:example/pages/normal_player_page.dart';
 import 'package:example/pages/notification_player_page.dart';
 import 'package:example/pages/overridden_aspect_ratio_page.dart';
@@ -89,6 +90,9 @@ class _WelcomePageState extends State<WelcomePage> {
       }),
       _buildExampleElementWidget("Event listener", () {
         _navigateToPage(EventListenerPage());
+      }),
+      _buildExampleElementWidget("Network logs / Inspector", () {
+        _navigateToPage(NetworkLogsPage());
       }),
       _buildExampleElementWidget("Subtitles", () {
         _navigateToPage(SubtitlesPage());

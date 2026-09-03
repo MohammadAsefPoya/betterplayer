@@ -68,6 +68,14 @@ static void* presentationSizeContext = &presentationSizeContext;
                                                  selector:@selector(itemDidPlayToEndTime:)
                                                      name:AVPlayerItemDidPlayToEndTimeNotification
                                                    object:item];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onAccessLogEntry:)
+                                                     name:AVPlayerItemNewAccessLogEntryNotification
+                                                   object:item];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onErrorLogEntry:)
+                                                     name:AVPlayerItemNewErrorLogEntryNotification
+                                                   object:item];
         self._observersAdded = true;
     }
 }
@@ -110,6 +118,67 @@ static void* presentationSizeContext = &presentationSizeContext;
                                       context:playbackBufferFullContext];
         [[NSNotificationCenter defaultCenter] removeObserver:self];
         self._observersAdded = false;
+    }
+}
+
+- (void)onAccessLogEntry:(NSNotification *)notification {
+    AVPlayerItem *item = [notification object];
+    if (item == nil) return;
+    AVPlayerItemAccessLog *accessLog = [item accessLog];
+    if (accessLog == nil) return;
+    AVPlayerItemAccessLogEvent *lastEvent = [accessLog.events lastObject];
+    if (lastEvent == nil) return;
+
+    NSMutableDictionary *event = [NSMutableDictionary dictionary];
+    event[@"event"] = @"networkLog";
+    event[@"phase"] = @"completed";
+    event[@"url"] = lastEvent.URI ?: @"";
+    event[@"serverAddress"] = lastEvent.serverAddress ?: @"";
+    event[@"bytesLoaded"] = @(lastEvent.numberOfBytesTransferred);
+    event[@"loadDurationMs"] = @((long long)(lastEvent.transferDuration * 1000.0));
+    if (lastEvent.indicatedBitrate > 0) {
+        event[@"indicatedBitrate"] = @(lastEvent.indicatedBitrate);
+        event[@"bitrate"] = @(lastEvent.indicatedBitrate);
+    }
+    if (lastEvent.observedBitrate > 0) {
+        event[@"observedBitrate"] = @(lastEvent.observedBitrate);
+    }
+    event[@"durationWatched"] = @(lastEvent.durationWatched);
+    event[@"numberOfDroppedVideoFrames"] = @(lastEvent.numberOfDroppedVideoFrames);
+    event[@"numberOfStalls"] = @(lastEvent.numberOfStalls);
+    event[@"statusCode"] = @(200);
+    event[@"timestamp"] = @((long long)([[NSDate date] timeIntervalSince1970] * 1000));
+    if (_key != nil) {
+        event[@"key"] = _key;
+    }
+
+    if (_eventSink != nil) {
+        _eventSink(event);
+    }
+}
+
+- (void)onErrorLogEntry:(NSNotification *)notification {
+    AVPlayerItem *item = [notification object];
+    if (item == nil) return;
+    AVPlayerItemErrorLog *errorLog = [item errorLog];
+    if (errorLog == nil) return;
+    AVPlayerItemErrorLogEvent *lastEvent = [errorLog.events lastObject];
+    if (lastEvent == nil) return;
+
+    NSMutableDictionary *event = [NSMutableDictionary dictionary];
+    event[@"event"] = @"networkLog";
+    event[@"phase"] = @"error";
+    event[@"url"] = lastEvent.URI ?: @"";
+    event[@"serverAddress"] = lastEvent.serverAddress ?: @"";
+    event[@"statusCode"] = @(lastEvent.errorStatusCode);
+    event[@"error"] = lastEvent.errorComment ?: lastEvent.errorDomain ?: @"Network playback error";
+    event[@"timestamp"] = @((long long)([[NSDate date] timeIntervalSince1970] * 1000));
+    if (_key != nil) {
+        event[@"key"] = _key;
+    }
+
+    if (_eventSink != nil) {
+        _eventSink(event);
     }
 }
 

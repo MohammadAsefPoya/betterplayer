@@ -26,6 +26,8 @@ import com.google.android.exoplayer2.drm.DrmSessionManager
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import com.google.android.exoplayer2.analytics.AnalyticsListener
+import com.google.android.exoplayer2.source.LoadEventInfo
+import com.google.android.exoplayer2.source.MediaLoadData
 import com.google.android.exoplayer2.video.VideoSize
 import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
@@ -33,6 +35,7 @@ import com.google.android.exoplayer2.drm.DefaultDrmSessionManager
 import com.google.android.exoplayer2.drm.FrameworkMediaDrm
 import com.google.android.exoplayer2.drm.UnsupportedDrmException
 import com.google.android.exoplayer2.drm.DummyExoMediaDrm
+import java.io.IOException
 import com.google.android.exoplayer2.drm.LocalMediaDrmCallback
 import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
 import com.google.android.exoplayer2.source.MediaSource
@@ -135,19 +138,174 @@ internal class BetterPlayer(
         workerObserverMap = HashMap()
         setupVideoPlayer(eventChannel, textureEntry, result)
         exoPlayer?.addAnalyticsListener(object : AnalyticsListener {
-        override fun onVideoSizeChanged(
-            eventTime: AnalyticsListener.EventTime,
-            videoSize: VideoSize
-        ) {
-            // build the same shape of event maps your Dart side already expects
-            val event: MutableMap<String, Any> = HashMap()
-            event["event"] = "videoSizeChanged"   // you can name this whatever you like
-            event["width"]   = videoSize.width
-            event["height"]  = videoSize.height
-            // send it over the already-wired EventChannel
-            eventSink.success(event)
-          }
+            override fun onVideoSizeChanged(
+                eventTime: AnalyticsListener.EventTime,
+                videoSize: VideoSize
+            ) {
+                val event: MutableMap<String, Any> = HashMap()
+                event["event"] = "videoSizeChanged"
+                event["width"] = videoSize.width
+                event["height"] = videoSize.height
+                eventSink.success(event)
+            }
+
+            override fun onLoadStarted(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData
+            ) {
+                try {
+                    val event: MutableMap<String, Any> = HashMap()
+                    event["event"] = "networkLog"
+                    event["phase"] = "start"
+                    event["requestId"] = loadEventInfo.loadTaskId.toString()
+                    event["url"] = loadEventInfo.dataSpec.uri.toString()
+                    event["httpMethod"] = getHttpMethodString(loadEventInfo.dataSpec.httpMethod)
+                    event["dataType"] = getDataTypeString(mediaLoadData.dataType)
+                    getTrackTypeString(mediaLoadData.trackType)?.let { event["trackType"] = it }
+                    event["timestamp"] = System.currentTimeMillis()
+                    if (mediaLoadData.mediaStartTimeMs != C.TIME_UNSET) {
+                        event["mediaStartTimeMs"] = mediaLoadData.mediaStartTimeMs
+                    }
+                    if (mediaLoadData.mediaEndTimeMs != C.TIME_UNSET) {
+                        event["mediaEndTimeMs"] = mediaLoadData.mediaEndTimeMs
+                    }
+                    eventSink.success(event)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Exception in onLoadStarted", e)
+                }
+            }
+
+            override fun onLoadCompleted(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData
+            ) {
+                try {
+                    val event: MutableMap<String, Any> = HashMap()
+                    event["event"] = "networkLog"
+                    event["phase"] = "completed"
+                    event["requestId"] = loadEventInfo.loadTaskId.toString()
+                    event["url"] = loadEventInfo.dataSpec.uri.toString()
+                    event["httpMethod"] = getHttpMethodString(loadEventInfo.dataSpec.httpMethod)
+                    event["bytesLoaded"] = loadEventInfo.bytesLoaded
+                    event["loadDurationMs"] = loadEventInfo.loadDurationMs
+                    event["dataType"] = getDataTypeString(mediaLoadData.dataType)
+                    getTrackTypeString(mediaLoadData.trackType)?.let { event["trackType"] = it }
+                    event["timestamp"] = System.currentTimeMillis()
+
+                    val format = mediaLoadData.trackFormat
+                    if (format != null) {
+                        if (format.bitrate != Format.NO_VALUE) {
+                            event["bitrate"] = format.bitrate
+                        }
+                        if (format.width != Format.NO_VALUE) {
+                            event["width"] = format.width
+                        }
+                        if (format.height != Format.NO_VALUE) {
+                            event["height"] = format.height
+                        }
+                    }
+
+                    if (mediaLoadData.mediaStartTimeMs != C.TIME_UNSET) {
+                        event["mediaStartTimeMs"] = mediaLoadData.mediaStartTimeMs
+                    }
+                    if (mediaLoadData.mediaEndTimeMs != C.TIME_UNSET) {
+                        event["mediaEndTimeMs"] = mediaLoadData.mediaEndTimeMs
+                    }
+
+                    event["statusCode"] = 200
+                    eventSink.success(event)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Exception in onLoadCompleted", e)
+                }
+            }
+
+            override fun onLoadCanceled(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData
+            ) {
+                try {
+                    val event: MutableMap<String, Any> = HashMap()
+                    event["event"] = "networkLog"
+                    event["phase"] = "canceled"
+                    event["requestId"] = loadEventInfo.loadTaskId.toString()
+                    event["url"] = loadEventInfo.dataSpec.uri.toString()
+                    event["httpMethod"] = getHttpMethodString(loadEventInfo.dataSpec.httpMethod)
+                    event["bytesLoaded"] = loadEventInfo.bytesLoaded
+                    event["loadDurationMs"] = loadEventInfo.loadDurationMs
+                    event["dataType"] = getDataTypeString(mediaLoadData.dataType)
+                    getTrackTypeString(mediaLoadData.trackType)?.let { event["trackType"] = it }
+                    event["timestamp"] = System.currentTimeMillis()
+                    eventSink.success(event)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Exception in onLoadCanceled", e)
+                }
+            }
+
+            override fun onLoadError(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData,
+                error: IOException,
+                wasCanceled: Boolean
+            ) {
+                try {
+                    val event: MutableMap<String, Any> = HashMap()
+                    event["event"] = "networkLog"
+                    event["phase"] = if (wasCanceled) "canceled" else "error"
+                    event["requestId"] = loadEventInfo.loadTaskId.toString()
+                    event["url"] = loadEventInfo.dataSpec.uri.toString()
+                    event["httpMethod"] = getHttpMethodString(loadEventInfo.dataSpec.httpMethod)
+                    event["bytesLoaded"] = loadEventInfo.bytesLoaded
+                    event["loadDurationMs"] = loadEventInfo.loadDurationMs
+                    event["dataType"] = getDataTypeString(mediaLoadData.dataType)
+                    getTrackTypeString(mediaLoadData.trackType)?.let { event["trackType"] = it }
+                    event["error"] = error.message ?: error.toString()
+                    if (error is HttpDataSource.InvalidResponseCodeException) {
+                        event["statusCode"] = error.responseCode
+                    }
+                    event["timestamp"] = System.currentTimeMillis()
+                    eventSink.success(event)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Exception in onLoadError", e)
+                }
+            }
         })
+    }
+
+    private fun getHttpMethodString(httpMethod: Int): String {
+        return when (httpMethod) {
+            com.google.android.exoplayer2.upstream.DataSpec.HTTP_METHOD_GET -> "GET"
+            com.google.android.exoplayer2.upstream.DataSpec.HTTP_METHOD_POST -> "POST"
+            com.google.android.exoplayer2.upstream.DataSpec.HTTP_METHOD_HEAD -> "HEAD"
+            else -> "GET"
+        }
+    }
+
+    private fun getDataTypeString(dataType: Int): String {
+        return when (dataType) {
+            C.DATA_TYPE_MEDIA -> "media"
+            C.DATA_TYPE_MEDIA_INITIALIZATION -> "initialization"
+            C.DATA_TYPE_DRM -> "drmKey"
+            C.DATA_TYPE_MANIFEST -> "manifest"
+            C.DATA_TYPE_TIME_SYNCHRONIZATION -> "timeSync"
+            C.DATA_TYPE_AD -> "ad"
+            C.DATA_TYPE_MEDIA_PROGRESSIVE_LIVE -> "media"
+            else -> "unknown"
+        }
+    }
+
+    private fun getTrackTypeString(trackType: Int): String? {
+        return when (trackType) {
+            C.TRACK_TYPE_AUDIO -> "audio"
+            C.TRACK_TYPE_VIDEO -> "video"
+            C.TRACK_TYPE_TEXT -> "text"
+            C.TRACK_TYPE_IMAGE -> "image"
+            C.TRACK_TYPE_METADATA -> "metadata"
+            else -> null
+        }
     }
 
     fun setDataSource(

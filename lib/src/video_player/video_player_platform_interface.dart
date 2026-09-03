@@ -379,6 +379,7 @@ class VideoEvent {
     this.size,
     this.buffered,
     this.position,
+    this.networkLogData,
   });
 
   /// The type of the event.
@@ -406,6 +407,9 @@ class VideoEvent {
 
   ///Seek position
   final Duration? position;
+
+  /// Network log event data from native layer
+  final Map<String, dynamic>? networkLogData;
 
   @override
   bool operator ==(Object other) {
@@ -466,6 +470,9 @@ enum VideoEventType {
   unknown,
 
   videoSizeChanged,
+
+  /// Network request or video chunk log event.
+  networkLog,
 }
 
 /// Describes a discrete segment of time within a video using a [start] and

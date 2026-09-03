@@ -31,6 +31,17 @@ class BetterPlayerController {
   ///List of event listeners, which listen to events.
   final List<Function(BetterPlayerEvent)?> _eventListeners = [];
 
+  ///Stream controller which emits network logs (chunks, manifests, keys, etc.).
+  final StreamController<BetterPlayerNetworkLog> _networkLogStreamController =
+      StreamController.broadcast();
+
+  ///List of network log listeners.
+  final List<Function(BetterPlayerNetworkLog)?> _networkLogListeners = [];
+
+  ///Stream of video chunk and network request logs.
+  Stream<BetterPlayerNetworkLog> get networkLogStream =>
+      _networkLogStreamController.stream;
+
   ///List of files to delete once player disposes.
   final List<File> _tempFiles = [];
 
@@ -911,6 +922,16 @@ class BetterPlayerController {
     _eventListeners.remove(eventListener);
   }
 
+  ///Add listener for network logs and video chunks.
+  void addNetworkLogListener(Function(BetterPlayerNetworkLog) listener) {
+    _networkLogListeners.add(listener);
+  }
+
+  ///Remove listener for network logs.
+  void removeNetworkLogListener(Function(BetterPlayerNetworkLog) listener) {
+    _networkLogListeners.remove(listener);
+  }
+
   ///Flag which determines whenever player is playing live data source.
   bool isLiveStream() {
     if (_betterPlayerDataSource == null) {
@@ -1280,6 +1301,26 @@ class BetterPlayerController {
           );
         }
         break;
+      case VideoEventType.networkLog:
+        if (event.networkLogData != null) {
+          final log = BetterPlayerNetworkLog.fromMap(event.networkLogData!);
+          if (!_networkLogStreamController.isClosed) {
+            _networkLogStreamController.add(log);
+          }
+          for (final listener in _networkLogListeners) {
+            listener?.call(log);
+          }
+          _postEvent(
+            BetterPlayerEvent(
+              BetterPlayerEventType.networkLog,
+              parameters: <String, dynamic>{
+                'networkLog': log,
+                ...event.networkLogData!,
+              },
+            ),
+          );
+        }
+        break;
       default:
 
         ///TODO: Handle when needed
@@ -1413,9 +1454,11 @@ class BetterPlayerController {
         videoPlayerController!.dispose();
       }
       _eventListeners.clear();
+      _networkLogListeners.clear();
       _nextVideoTimer?.cancel();
       _nextVideoTimeStreamController.close();
       _controlsVisibilityStreamController.close();
+      _networkLogStreamController.close();
       _videoEventStreamSubscription?.cancel();
       _disposed = true;
       _controllerEventStreamController.close();

@@ -260,6 +260,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           break;
         case VideoEventType.videoSizeChanged:
           value = value.copyWith(size: event.size);
+          break;
+        case VideoEventType.networkLog:
+          break;
         case VideoEventType.unknown:
           break;
       }

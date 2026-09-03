@@ -437,6 +437,13 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             size: Size(w.toDouble(), h.toDouble()),
           );
 
+        case 'networkLog':
+          return VideoEvent(
+            eventType: VideoEventType.networkLog,
+            key: key,
+            networkLogData: Map<String, dynamic>.from(map),
+          );
+
         default:
           return VideoEvent(
             eventType: VideoEventType.unknown,
