@@ -4,6 +4,13 @@ import 'package:better_player/src/video_player/video_player_platform_interface.d
 class MockVideoPlayerController extends VideoPlayerController {
   MockVideoPlayerController() : super(autoCreate: false) {
     value = VideoPlayerValue(duration: const Duration());
+    videoEventStreamController.stream.listen((event) {
+      if (event.eventType == VideoEventType.play) {
+        value = value.copyWith(isPlaying: true);
+      } else if (event.eventType == VideoEventType.pause) {
+        value = value.copyWith(isPlaying: false);
+      }
+    });
   }
 
   bool isLoopingState = false;

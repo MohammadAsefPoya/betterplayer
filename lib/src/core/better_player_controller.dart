@@ -22,6 +22,17 @@ class BetterPlayerController {
   static const String _dataSourceParameter = "dataSource";
   static const String _authorizationHeader = "Authorization";
 
+  ///Manager responsible for playback telemetry collection and reporting.
+  late final BetterPlayerTelemetryManager _telemetryManager =
+      BetterPlayerTelemetryManager(this);
+
+  ///The unique session ID for this controller instance.
+  ///Created once and never changed until controller dispose.
+  String get sessionId => _telemetryManager.sessionId;
+
+  ///Telemetry manager instance.
+  BetterPlayerTelemetryManager get telemetryManager => _telemetryManager;
+
   ///General configuration used in controller instance.
   final BetterPlayerConfiguration betterPlayerConfiguration;
 
@@ -270,7 +281,28 @@ class BetterPlayerController {
   }
 
   ///Setup new data source in Better Player.
-  Future setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
+  Future setupDataSource(
+    BetterPlayerDataSource betterPlayerDataSource, {
+    dynamic episodeId,
+    String? platform,
+    String? deviceType,
+    String? os,
+    BetterPlayerTelemetryConfiguration? telemetryConfiguration,
+  }) async {
+    final effectiveTelemetryConfig =
+        telemetryConfiguration ?? betterPlayerDataSource.telemetryConfiguration;
+    if (effectiveTelemetryConfig != null && effectiveTelemetryConfig.hasValue) {
+      _telemetryManager.startSession(
+        configuration: effectiveTelemetryConfig,
+        telemetryData: BetterPlayerTelemetryData(
+          episodeId: episodeId ?? betterPlayerDataSource.episodeId,
+          platform: platform ?? betterPlayerDataSource.platform,
+          deviceType: deviceType ?? betterPlayerDataSource.deviceType,
+          os: os ?? betterPlayerDataSource.os,
+        ),
+      );
+    }
+
     postEvent(BetterPlayerEvent(BetterPlayerEventType.setupDataSource,
         parameters: <String, dynamic>{
           _dataSourceParameter: betterPlayerDataSource,
@@ -317,6 +349,24 @@ class BetterPlayerController {
     await _setupDataSource(betterPlayerDataSource);
     setTrack(BetterPlayerAsmsTrack.defaultTrack());
   }
+
+  ///Alias for [setupDataSource] with telemetry parameters.
+  Future setDataSource(
+    BetterPlayerDataSource betterPlayerDataSource, {
+    dynamic episodeId,
+    String? platform,
+    String? deviceType,
+    String? os,
+    BetterPlayerTelemetryConfiguration? telemetryConfiguration,
+  }) =>
+      setupDataSource(
+        betterPlayerDataSource,
+        episodeId: episodeId,
+        platform: platform,
+        deviceType: deviceType,
+        os: os,
+        telemetryConfiguration: telemetryConfiguration,
+      );
 
   ///Configure subtitles based on subtitles source.
   void _setupSubtitles() {
@@ -849,6 +899,7 @@ class BetterPlayerController {
 
   ///Send player event to all listeners.
   void _postEvent(BetterPlayerEvent betterPlayerEvent) {
+    _telemetryManager.handlePlayerEvent(betterPlayerEvent);
     for (final Function(BetterPlayerEvent)? eventListener in _eventListeners) {
       if (eventListener != null) {
         eventListener(betterPlayerEvent);
@@ -1304,6 +1355,7 @@ class BetterPlayerController {
       case VideoEventType.networkLog:
         if (event.networkLogData != null) {
           final log = BetterPlayerNetworkLog.fromMap(event.networkLogData!);
+          _telemetryManager.handleNetworkLog(log);
           if (!_networkLogStreamController.isClosed) {
             _networkLogStreamController.add(log);
           }
@@ -1460,6 +1512,7 @@ class BetterPlayerController {
       _controlsVisibilityStreamController.close();
       _networkLogStreamController.close();
       _videoEventStreamSubscription?.cancel();
+      _telemetryManager.dispose(isFinal: true);
       _disposed = true;
       _controllerEventStreamController.close();
 

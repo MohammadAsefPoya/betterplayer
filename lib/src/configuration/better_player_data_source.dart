@@ -4,6 +4,7 @@ import 'package:better_player/src/configuration/better_player_drm_configuration.
 import 'package:better_player/src/configuration/better_player_notification_configuration.dart';
 import 'package:better_player/src/configuration/better_player_video_format.dart';
 import 'package:better_player/src/subtitles/better_player_subtitles_source.dart';
+import 'package:better_player/src/telemetry/better_player_telemetry_models.dart';
 import 'package:flutter/widgets.dart';
 
 import 'better_player_cache_configuration.dart';
@@ -76,6 +77,21 @@ class BetterPlayerDataSource {
   ///platform.
   final BetterPlayerBufferingConfiguration bufferingConfiguration;
 
+  ///Configuration for playback telemetry
+  final BetterPlayerTelemetryConfiguration? telemetryConfiguration;
+
+  ///Playable episode ID for telemetry
+  final dynamic episodeId;
+
+  ///Platform string for telemetry (e.g. 'ANDROID', 'IOS', 'WEB')
+  final String? platform;
+
+  ///Device type for telemetry (e.g. 'MOBILE', 'TABLET', 'DESKTOP')
+  final String? deviceType;
+
+  ///Operating system string for telemetry (defaults to Platform.operatingSystem if omitted)
+  final String? os;
+
   BetterPlayerDataSource(
     this.type,
     this.url, {
@@ -99,6 +115,11 @@ class BetterPlayerDataSource {
     this.drmConfiguration,
     this.placeholder,
     this.bufferingConfiguration = const BetterPlayerBufferingConfiguration(),
+    this.telemetryConfiguration,
+    this.episodeId,
+    this.platform,
+    this.deviceType,
+    this.os,
   }) : assert(
             (type == BetterPlayerDataSourceType.network ||
                     type == BetterPlayerDataSourceType.file) ||
@@ -126,6 +147,11 @@ class BetterPlayerDataSource {
     Widget? placeholder,
     BetterPlayerBufferingConfiguration bufferingConfiguration =
         const BetterPlayerBufferingConfiguration(),
+    BetterPlayerTelemetryConfiguration? telemetryConfiguration,
+    dynamic episodeId,
+    String? platform,
+    String? deviceType,
+    String? os,
   }) {
     return BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
@@ -144,6 +170,11 @@ class BetterPlayerDataSource {
       drmConfiguration: drmConfiguration,
       placeholder: placeholder,
       bufferingConfiguration: bufferingConfiguration,
+      telemetryConfiguration: telemetryConfiguration,
+      episodeId: episodeId,
+      platform: platform,
+      deviceType: deviceType,
+      os: os,
     );
   }
 
@@ -159,6 +190,11 @@ class BetterPlayerDataSource {
     BetterPlayerNotificationConfiguration? notificationConfiguration,
     Duration? overriddenDuration,
     Widget? placeholder,
+    BetterPlayerTelemetryConfiguration? telemetryConfiguration,
+    dynamic episodeId,
+    String? platform,
+    String? deviceType,
+    String? os,
   }) {
     return BetterPlayerDataSource(
       BetterPlayerDataSourceType.file,
@@ -172,6 +208,11 @@ class BetterPlayerDataSource {
           const BetterPlayerNotificationConfiguration(showNotification: false),
       overriddenDuration: overriddenDuration,
       placeholder: placeholder,
+      telemetryConfiguration: telemetryConfiguration,
+      episodeId: episodeId,
+      platform: platform,
+      deviceType: deviceType,
+      os: os,
     );
   }
 
@@ -188,6 +229,11 @@ class BetterPlayerDataSource {
     BetterPlayerNotificationConfiguration? notificationConfiguration,
     Duration? overriddenDuration,
     Widget? placeholder,
+    BetterPlayerTelemetryConfiguration? telemetryConfiguration,
+    dynamic episodeId,
+    String? platform,
+    String? deviceType,
+    String? os,
   }) {
     return BetterPlayerDataSource(
       BetterPlayerDataSourceType.memory,
@@ -203,6 +249,11 @@ class BetterPlayerDataSource {
           const BetterPlayerNotificationConfiguration(showNotification: false),
       overriddenDuration: overriddenDuration,
       placeholder: placeholder,
+      telemetryConfiguration: telemetryConfiguration,
+      episodeId: episodeId,
+      platform: platform,
+      deviceType: deviceType,
+      os: os,
     );
   }
 
@@ -227,6 +278,11 @@ class BetterPlayerDataSource {
     Widget? placeholder,
     BetterPlayerBufferingConfiguration? bufferingConfiguration =
         const BetterPlayerBufferingConfiguration(),
+    BetterPlayerTelemetryConfiguration? telemetryConfiguration,
+    dynamic episodeId,
+    String? platform,
+    String? deviceType,
+    String? os,
   }) {
     return BetterPlayerDataSource(
       type ?? this.type,
@@ -249,6 +305,12 @@ class BetterPlayerDataSource {
       placeholder: placeholder ?? this.placeholder,
       bufferingConfiguration:
           bufferingConfiguration ?? this.bufferingConfiguration,
+      telemetryConfiguration:
+          telemetryConfiguration ?? this.telemetryConfiguration,
+      episodeId: episodeId ?? this.episodeId,
+      platform: platform ?? this.platform,
+      deviceType: deviceType ?? this.deviceType,
+      os: os ?? this.os,
     );
   }
 }
