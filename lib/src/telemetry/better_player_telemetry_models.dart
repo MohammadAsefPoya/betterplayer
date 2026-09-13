@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'better_player_telemetry_utils.dart';
 
 /// Configuration for the playback telemetry client.
 @immutable
@@ -89,7 +90,7 @@ class BetterPlayerTelemetryConfiguration {
 /// Metadata provided for the viewing session.
 @immutable
 class BetterPlayerTelemetryData {
-  /// Playable episode ID (integer or identifier).
+  /// Playable episode ID (integer >= 1).
   final dynamic episodeId;
 
   /// Platform name (e.g. 'ANDROID', 'IOS', 'WEB').
@@ -124,17 +125,40 @@ class BetterPlayerTelemetryData {
     required String sessionId,
     required String startedAt,
   }) {
-    return <String, dynamic>{
+    final effectiveEpisodeId =
+        BetterPlayerTelemetryUtils.normalizeEpisodeId(episodeId);
+    final effectivePlatform =
+        BetterPlayerTelemetryUtils.normalizePlatform(platform);
+    final effectiveDeviceType =
+        BetterPlayerTelemetryUtils.normalizeDeviceType(deviceType);
+    final effectiveOs = (os != null && os!.trim().isNotEmpty)
+        ? (os!.trim().length > 100 ? os!.trim().substring(0, 100) : os!.trim())
+        : null;
+
+    final map = <String, dynamic>{
       'sessionId': sessionId,
-      if (episodeId != null) 'episodeId': episodeId,
-      if (platform != null && platform!.trim().isNotEmpty)
-        'platform': platform!.trim(),
-      if (deviceType != null && deviceType!.trim().isNotEmpty)
-        'deviceType': deviceType!.trim(),
-      if (os != null && os!.trim().isNotEmpty) 'os': os!.trim(),
+      if (effectiveEpisodeId != null) 'episodeId': effectiveEpisodeId,
+      'platform': effectivePlatform,
+      'deviceType': effectiveDeviceType,
+      if (effectiveOs != null) 'os': effectiveOs,
       'startedAt': startedAt,
-      if (extra != null && extra!.isNotEmpty) ...extra!,
     };
+
+    if (extra != null && extra!.isNotEmpty) {
+      for (final entry in extra!.entries) {
+        final keyLower = entry.key.toLowerCase();
+        // Do not send userId or profileId in the JSON body per guide
+        if (keyLower == 'userid' ||
+            keyLower == 'profileid' ||
+            keyLower == 'user_id' ||
+            keyLower == 'profile_id') {
+          continue;
+        }
+        map[entry.key] = entry.value;
+      }
+    }
+
+    return map;
   }
 }
 
@@ -144,8 +168,8 @@ class BetterPlayerChunkLoadMetric {
   /// Segment sequence number.
   final int chunkSeq;
 
-  /// Quality index/level.
-  final int? level;
+  /// Quality index/level (required non-negative integer quality index).
+  final int level;
 
   /// Video interval start in seconds.
   final double startS;
@@ -164,7 +188,7 @@ class BetterPlayerChunkLoadMetric {
 
   const BetterPlayerChunkLoadMetric({
     required this.chunkSeq,
-    this.level,
+    this.level = 0,
     required this.startS,
     required this.endS,
     required this.bytes,
@@ -175,7 +199,7 @@ class BetterPlayerChunkLoadMetric {
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
       'chunkSeq': chunkSeq,
-      if (level != null) 'level': level,
+      'level': level,
       'startS': startS,
       'endS': endS,
       'bytes': bytes,

@@ -301,6 +301,8 @@ class BetterPlayerController {
           os: os ?? betterPlayerDataSource.os,
         ),
       );
+    } else {
+      _telemetryManager.stopSession();
     }
 
     postEvent(BetterPlayerEvent(BetterPlayerEventType.setupDataSource,

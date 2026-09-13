@@ -16,12 +16,13 @@ import 'better_player_telemetry_utils.dart';
 class BetterPlayerTelemetryManager {
   final BetterPlayerController controller;
 
-  /// The unique session ID for this controller instance.
-  /// Created once and never changed until controller dispose.
-  final String sessionId;
+  /// The unique session ID for the currently active viewing session.
+  /// A fresh UUID v4 is generated on each startSession() call.
+  String _sessionId;
 
   BetterPlayerTelemetryConfiguration? _configuration;
   BetterPlayerTelemetryData? _telemetryData;
+  String? _sessionStartedAt;
 
   final HttpClient _httpClient;
 
@@ -29,6 +30,7 @@ class BetterPlayerTelemetryManager {
   Timer? _bufferSampleTimer;
   Timer? _batchSendTimer;
   Timer? _sessionStartRetryTimer;
+  Duration _sessionStartRetryDelay = const Duration(seconds: 2);
 
   // Session state
   bool _isDisposed = false;
@@ -54,9 +56,12 @@ class BetterPlayerTelemetryManager {
   BetterPlayerTelemetryBatch? _retryBatch;
 
   BetterPlayerTelemetryManager(this.controller, {HttpClient? httpClient})
-      : sessionId = BetterPlayerTelemetryUtils.generateUuidV4(),
+      : _sessionId = BetterPlayerTelemetryUtils.generateUuidV4(),
         _httpClient = httpClient ??
             (HttpClient()..connectionTimeout = const Duration(seconds: 5));
+
+  /// Gets the unique session ID for the currently active viewing session.
+  String get sessionId => _sessionId;
 
   /// Gets the current telemetry configuration.
   BetterPlayerTelemetryConfiguration? get configuration => _configuration;
@@ -67,20 +72,66 @@ class BetterPlayerTelemetryManager {
   /// Whether the session start request has succeeded on the server.
   bool get isSessionStartCompleted => _sessionStartCompleted;
 
+  /// Stops and clears the current telemetry session.
+  /// If [flushPrevious] is true and a session was active, attempts a final upload.
+  Future<void> stopSession({bool flushPrevious = true}) async {
+    _bufferSampleTimer?.cancel();
+    _bufferSampleTimer = null;
+    _batchSendTimer?.cancel();
+    _batchSendTimer = null;
+    _sessionStartRetryTimer?.cancel();
+    _sessionStartRetryTimer = null;
+
+    if (flushPrevious &&
+        _configuration?.hasValue == true &&
+        (_sessionStartCompleted || _hasPendingData)) {
+      try {
+        _finalizeWatchedRange(_getCurrentPositionSeconds());
+        await _sendPendingBatches(isFinal: true)
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
+
+    _configuration = null;
+    _telemetryData = null;
+    _sessionStartInitiated = false;
+    _sessionStartCompleted = false;
+    _hasPlaybackStarted = false;
+    _chunkSeqCounter = 0;
+    _lastCdnHost = null;
+    _activeWatchedRange = null;
+    _lastWatchedPositionS = null;
+    _currentQualityLevel = null;
+    _retryBatch = null;
+    _pendingChunkLoads.clear();
+    _pendingBufferSamples.clear();
+    _pendingWatchedRanges.clear();
+    _pendingPlaybackEvents.clear();
+  }
+
   /// Initializes or updates the viewing session telemetry with configuration and data.
   void startSession({
     BetterPlayerTelemetryConfiguration? configuration,
     BetterPlayerTelemetryData? telemetryData,
   }) {
-    _configuration = configuration;
-    _telemetryData = telemetryData;
+    // If a session is already in progress, stop and flush it first
+    if (_configuration?.hasValue == true &&
+        (_sessionStartCompleted || _hasPendingData)) {
+      stopSession(flushPrevious: true);
+    } else {
+      stopSession(flushPrevious: false);
+    }
 
     if (configuration == null || !configuration.hasValue) {
       return;
     }
 
-    _chunkSeqCounter = 0;
-    _lastCdnHost = null;
+    _configuration = configuration;
+    _telemetryData = telemetryData;
+    _sessionId = BetterPlayerTelemetryUtils.generateUuidV4();
+    _sessionStartedAt =
+        BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now());
+    _sessionStartRetryDelay = const Duration(seconds: 2);
 
     _startTimers();
     _dispatchSessionStart();
@@ -121,26 +172,20 @@ class BetterPlayerTelemetryManager {
     }
 
     _sessionStartInitiated = true;
-    final startedAt =
+    final startedAt = _sessionStartedAt ??
         BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now());
+    _sessionStartedAt = startedAt;
 
-    final payload = <String, dynamic>{
-      'sessionId': sessionId,
-      if (data?.episodeId != null) 'episodeId': data!.episodeId,
-      if (data?.platform != null && data!.platform!.trim().isNotEmpty)
-        'platform': data!.platform!.trim(),
-      if (data?.deviceType != null && data!.deviceType!.trim().isNotEmpty)
-        'deviceType': data!.deviceType!.trim(),
-      if (data?.os != null && data!.os!.trim().isNotEmpty)
-        'os': data!.os!.trim(),
-      'startedAt': startedAt,
-      if (data?.extra != null && data!.extra!.isNotEmpty) ...data!.extra!,
-    };
+    final payload = (data ?? const BetterPlayerTelemetryData()).toMap(
+      sessionId: sessionId,
+      startedAt: startedAt,
+    );
 
     try {
       final client = config.httpClient ?? _httpClient;
       final request = await client.postUrl(targetUri);
       request.headers.contentType = ContentType.json;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       config.headers?.forEach((key, value) {
         request.headers.set(key, value);
       });
@@ -153,8 +198,14 @@ class BetterPlayerTelemetryManager {
       if (response.statusCode >= 200 && response.statusCode < 300) {
         _sessionStartCompleted = true;
         _sessionStartRetryTimer?.cancel();
+        _sessionStartRetryDelay = const Duration(seconds: 2);
         // Trigger immediate send of any observations queued during session start
         _sendPendingBatches(isFinal: false);
+      } else if (response.statusCode == 400 || response.statusCode == 409) {
+        BetterPlayerUtils.log(
+          'Telemetry session start rejected with status ${response.statusCode}. Halting retries.',
+        );
+        _sessionStartRetryTimer?.cancel();
       } else {
         _scheduleSessionStartRetry();
       }
@@ -170,7 +221,10 @@ class BetterPlayerTelemetryManager {
         _sessionStartCompleted ||
         _configuration?.hasValue != true) return;
     _sessionStartRetryTimer?.cancel();
-    _sessionStartRetryTimer = Timer(const Duration(seconds: 5), () {
+    _sessionStartRetryTimer = Timer(_sessionStartRetryDelay, () {
+      _sessionStartRetryDelay = Duration(
+        seconds: min(30, _sessionStartRetryDelay.inSeconds * 2),
+      );
       _dispatchSessionStart();
     });
   }
@@ -229,23 +283,25 @@ class BetterPlayerTelemetryManager {
   void handleNetworkLog(BetterPlayerNetworkLog log) {
     if (_configuration?.hasValue != true || _isDisposed) return;
 
-    // Detect CDN switch
-    try {
-      final uri = Uri.parse(log.url);
-      if (uri.host.isNotEmpty) {
-        if (_lastCdnHost != null && _lastCdnHost != uri.host) {
-          recordPlaybackEvent(
-            type: 'CDN_SWITCH',
-            positionS: _getCurrentPositionSeconds(),
-            details: <String, dynamic>{
-              'previousHost': _lastCdnHost,
-              'newHost': uri.host,
-            },
-          );
+    // Detect CDN switch on media streams / manifests
+    if (log.isHls || log.isMediaChunk) {
+      try {
+        final uri = Uri.parse(log.url);
+        if (uri.host.isNotEmpty) {
+          if (_lastCdnHost != null && _lastCdnHost != uri.host) {
+            recordPlaybackEvent(
+              type: 'CDN_SWITCH',
+              positionS: _getCurrentPositionSeconds(),
+              details: <String, dynamic>{
+                'previousHost': _lastCdnHost,
+                'newHost': uri.host,
+              },
+            );
+          }
+          _lastCdnHost = uri.host;
         }
-        _lastCdnHost = uri.host;
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
     // Ingest completed media chunk segment
     // Rule: Report real measurements. Do not send invented or incomplete segment loads.
@@ -253,22 +309,38 @@ class BetterPlayerTelemetryManager {
         log.phase == BetterPlayerNetworkLogPhase.completed &&
         log.mediaStartTimeMs != null &&
         log.mediaEndTimeMs != null) {
-      final startS = log.mediaStartTimeMs! / 1000.0;
-      final endS = log.mediaEndTimeMs! / 1000.0;
-      final chunkSeq = ++_chunkSeqCounter;
+      final startS = max(0.0, log.mediaStartTimeMs! / 1000.0);
+      final endS = max(startS, log.mediaEndTimeMs! / 1000.0);
+      final chunkSeq = _chunkSeqCounter++;
 
       final chunkMetric = BetterPlayerChunkLoadMetric(
         chunkSeq: chunkSeq,
-        level: log.bitrate ?? _currentQualityLevel,
+        level: _resolveQualityLevelIndex(log.bitrate, log.height),
         startS: startS,
         endS: endS,
-        bytes: log.bytesLoaded,
-        loadMs: log.durationMs,
+        bytes: max(0, log.bytesLoaded),
+        loadMs: max(0, log.durationMs),
         loadedAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(log.timestamp),
       );
 
       _pendingChunkLoads.add(chunkMetric);
     }
+  }
+
+  int _resolveQualityLevelIndex(int? bitrate, int? height) {
+    final tracks = controller.betterPlayerAsmsTracks;
+    if (tracks.isNotEmpty) {
+      for (int i = 0; i < tracks.length; i++) {
+        final track = tracks[i];
+        if (bitrate != null && track.bitrate == bitrate) {
+          return i;
+        }
+        if (height != null && track.height == height) {
+          return i;
+        }
+      }
+    }
+    return _currentQualityLevel ?? 0;
   }
 
   bool get _isControllerPlaying {
@@ -281,20 +353,12 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handlePlay(double positionS) {
-    // Record PLAYBACK_STARTED once per session when genuine playback begins
-    if (!_hasPlaybackStarted && positionS >= 0) {
-      _hasPlaybackStarted = true;
-      recordPlaybackEvent(
-        type: 'PLAYBACK_STARTED',
-        positionS: positionS,
-      );
-    } else {
+    if (_hasPlaybackStarted) {
       recordPlaybackEvent(
         type: 'RESUME',
         positionS: positionS,
       );
     }
-
     _startOrExtendWatchedRange(positionS);
   }
 
@@ -314,7 +378,8 @@ class BetterPlayerTelemetryManager {
       type: 'SEEK',
       positionS: currentPositionS,
       details: <String, dynamic>{
-        'targetPositionS': toPositionS,
+        'fromS': currentPositionS,
+        'toS': toPositionS,
       },
     );
 
@@ -324,8 +389,8 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handleStallStart(double positionS) {
-    // Only record stall if video was actively playing
-    if (_isControllerPlaying) {
+    // Only record stall if video playback genuinely started and was playing
+    if (_hasPlaybackStarted && _isControllerPlaying) {
       _finalizeWatchedRange(positionS);
       recordPlaybackEvent(
         type: 'STALL_START',
@@ -335,13 +400,15 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handleStallEnd(double positionS) {
-    recordPlaybackEvent(
-      type: 'STALL_END',
-      positionS: positionS,
-    );
+    if (_hasPlaybackStarted) {
+      recordPlaybackEvent(
+        type: 'STALL_END',
+        positionS: positionS,
+      );
 
-    if (_isControllerPlaying) {
-      _startOrExtendWatchedRange(positionS);
+      if (_isControllerPlaying) {
+        _startOrExtendWatchedRange(positionS);
+      }
     }
   }
 
@@ -349,12 +416,23 @@ class BetterPlayerTelemetryManager {
     _finalizeWatchedRange(positionS);
 
     final track = controller.betterPlayerAsmsTrack;
-    _currentQualityLevel = track?.bitrate ?? track?.height;
+    final tracks = controller.betterPlayerAsmsTracks;
+    int? newLevelIndex;
+    if (track != null && tracks.isNotEmpty) {
+      final idx = tracks.indexOf(track);
+      if (idx != -1) newLevelIndex = idx;
+    }
+    newLevelIndex ??= (tracks.isNotEmpty ? 0 : 0);
+
+    final oldLevelIndex = _currentQualityLevel ?? 0;
+    _currentQualityLevel = newLevelIndex;
 
     recordPlaybackEvent(
       type: 'QUALITY_SWITCH',
       positionS: positionS,
       details: <String, dynamic>{
+        'fromLevel': oldLevelIndex,
+        'toLevel': newLevelIndex,
         if (track?.bitrate != null) 'bitrate': track!.bitrate,
         if (track?.width != null) 'width': track!.width,
         if (track?.height != null) 'height': track!.height,
@@ -381,7 +459,9 @@ class BetterPlayerTelemetryManager {
       type: 'ERROR',
       positionS: positionS,
       details: <String, dynamic>{
-        'error': error?.toString() ?? 'Playback error',
+        'code': 'PLAYBACK_ERROR',
+        'message': error?.toString() ?? 'Playback error',
+        'fatal': false,
       },
     );
   }
@@ -389,7 +469,8 @@ class BetterPlayerTelemetryManager {
   void _handleProgress(double currentPositionS) {
     if (!_isControllerPlaying) return;
 
-    if (!_hasPlaybackStarted && currentPositionS > 0.05) {
+    // First frame played — record PLAYBACK_STARTED once per session
+    if (!_hasPlaybackStarted && currentPositionS >= 0.0) {
       _hasPlaybackStarted = true;
       recordPlaybackEvent(
         type: 'PLAYBACK_STARTED',
@@ -478,7 +559,7 @@ class BetterPlayerTelemetryManager {
     if (videoValue == null || !videoValue.initialized) return;
 
     final positionMs = videoValue.position.inMilliseconds;
-    final positionS = positionMs / 1000.0;
+    final positionS = max(0.0, positionMs / 1000.0);
 
     // Count only continuous playable media ahead of current position
     double bufferedAheadS = 0.0;
@@ -502,7 +583,7 @@ class BetterPlayerTelemetryManager {
 
   double _getCurrentPositionSeconds() {
     final pos = controller.videoPlayerController?.value.position;
-    return (pos?.inMilliseconds ?? 0) / 1000.0;
+    return max(0.0, (pos?.inMilliseconds ?? 0) / 1000.0);
   }
 
   /// Prepares and sends batches of observations.
@@ -532,24 +613,35 @@ class BetterPlayerTelemetryManager {
         }
       }
 
-      // 2. Finalize active watched range if final
+      // 2. Handle active watched range
       if (isFinal) {
         _finalizeWatchedRange(_getCurrentPositionSeconds());
+      } else if (_activeWatchedRange != null) {
+        final curPos = _getCurrentPositionSeconds();
+        if ((curPos - _activeWatchedRange!.fromS).abs() > 0.05) {
+          // Snapshot active watched range into this batch, retaining same rangeId
+          _pendingWatchedRanges.add(_activeWatchedRange!.copyWith(toS: curPos));
+        }
       }
 
       // 3. Partition queues respecting batch limits
       while (_hasPendingData || (isFinal && _pendingPlaybackEvents.isEmpty)) {
-        final chunkBatch = _takeSublist(_pendingChunkLoads, config.maxChunkLoadsPerBatch);
-        final bufferBatch = _takeSublist(_pendingBufferSamples, config.maxBufferSamplesPerBatch);
-        final watchedBatch = _takeSublist(_pendingWatchedRanges, config.maxWatchedRangesPerBatch);
-        final eventsBatch = _takeSublist(_pendingPlaybackEvents, config.maxPlaybackEventsPerBatch);
+        final chunkBatch =
+            _takeSublist(_pendingChunkLoads, config.maxChunkLoadsPerBatch);
+        final bufferBatch =
+            _takeSublist(_pendingBufferSamples, config.maxBufferSamplesPerBatch);
+        final watchedBatch = _takeSublist(
+            _pendingWatchedRanges, config.maxWatchedRangesPerBatch);
+        final eventsBatch = _takeSublist(
+            _pendingPlaybackEvents, config.maxPlaybackEventsPerBatch);
 
         final bool thisBatchIsFinal = isFinal && !_hasPendingData;
 
         final batch = BetterPlayerTelemetryBatch(
           sessionId: sessionId,
           batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
-          sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
+          sentAt:
+              BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
           isFinal: thisBatchIsFinal,
           chunkLoads: chunkBatch,
           bufferSamples: bufferBatch,
@@ -602,6 +694,7 @@ class BetterPlayerTelemetryManager {
       final client = config.httpClient ?? _httpClient;
       final request = await client.postUrl(targetUri);
       request.headers.contentType = ContentType.json;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       config.headers?.forEach((key, value) {
         request.headers.set(key, value);
       });
@@ -611,9 +704,26 @@ class BetterPlayerTelemetryManager {
       request.add(jsonBytes);
 
       final response = await request.close();
-      final isSuccess = response.statusCode >= 200 && response.statusCode < 300;
+      final statusCode = response.statusCode;
       await response.drain<void>();
-      return isSuccess;
+
+      if (statusCode >= 200 && statusCode < 300) {
+        return true;
+      } else if (statusCode == 404) {
+        // Session not found on backend! Re-dispatch session start then retry
+        BetterPlayerUtils.log(
+          'Telemetry batch 404: Session not found, re-registering session',
+        );
+        _sessionStartCompleted = false;
+        _dispatchSessionStart();
+        return false;
+      } else if (statusCode == 400) {
+        // Bad request - check fields, don't endlessly retry same invalid batch
+        BetterPlayerUtils.log('Telemetry batch rejected with HTTP 400: $batch');
+        return true; // Discard invalid batch
+      } else {
+        return false;
+      }
     } catch (e) {
       BetterPlayerUtils.log('Telemetry batch upload failed: $e');
       return false;

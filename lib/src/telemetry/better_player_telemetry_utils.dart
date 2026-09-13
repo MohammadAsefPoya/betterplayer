@@ -1,10 +1,29 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 
 /// Utility methods for Playback Telemetry
 class BetterPlayerTelemetryUtils {
   static final Random _secureRandom = Random.secure();
+
+  /// Valid platforms allowed by the backend telemetry specification.
+  static const Set<String> allowedPlatforms = {
+    'WEB',
+    'ANDROID',
+    'IOS',
+    'ANDROID_TV',
+    'OLD_WEB_TV',
+  };
+
+  /// Valid device types allowed by the backend telemetry specification.
+  static const Set<String> allowedDeviceTypes = {
+    'DESKTOP',
+    'MOBILE',
+    'TABLET',
+    'TV',
+    'UNKNOWN',
+  };
 
   /// Generates a compliant RFC 4122 version 4 UUID string.
   /// Example: 762a3221-482d-483a-b661-bb6c64a753fa
@@ -26,10 +45,74 @@ class BetterPlayerTelemetryUtils {
     return buffer.toString();
   }
 
-  /// Safely resolves operating system name.
+  /// Safely resolves default platform name conforming to backend enum.
+  static String resolveDefaultPlatform() {
+    if (kIsWeb) return 'WEB';
+    try {
+      if (Platform.isAndroid) return 'ANDROID';
+      if (Platform.isIOS) return 'IOS';
+    } catch (_) {}
+    return 'WEB';
+  }
+
+  /// Normalizes and validates the platform string against allowed values.
+  static String normalizePlatform(String? platform) {
+    if (platform == null || platform.trim().isEmpty) {
+      return resolveDefaultPlatform();
+    }
+    final normalized = platform.trim().toUpperCase();
+    if (allowedPlatforms.contains(normalized)) {
+      return normalized;
+    }
+    return resolveDefaultPlatform();
+  }
+
+  /// Safely resolves default device type conforming to backend enum.
+  static String resolveDefaultDeviceType() {
+    if (kIsWeb) return 'DESKTOP';
+    try {
+      if (Platform.isAndroid || Platform.isIOS) return 'MOBILE';
+      if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+        return 'DESKTOP';
+      }
+    } catch (_) {}
+    return 'UNKNOWN';
+  }
+
+  /// Normalizes and validates the device type string against allowed values.
+  static String normalizeDeviceType(String? deviceType) {
+    if (deviceType == null || deviceType.trim().isEmpty) {
+      return resolveDefaultDeviceType();
+    }
+    final normalized = deviceType.trim().toUpperCase();
+    if (allowedDeviceTypes.contains(normalized)) {
+      return normalized;
+    }
+    return resolveDefaultDeviceType();
+  }
+
+  /// Normalizes episodeId to integer >= 1 as required by backend specification.
+  static int? normalizeEpisodeId(dynamic episodeId) {
+    if (episodeId == null) return null;
+    if (episodeId is int) return episodeId >= 1 ? episodeId : 1;
+    if (episodeId is num) {
+      final val = episodeId.toInt();
+      return val >= 1 ? val : 1;
+    }
+    if (episodeId is String) {
+      final parsed = int.tryParse(episodeId.trim());
+      if (parsed != null) {
+        return parsed >= 1 ? parsed : 1;
+      }
+    }
+    return null;
+  }
+
+  /// Safely resolves operating system name, clamped to max 100 characters.
   static String getOperatingSystem() {
     try {
-      return Platform.operatingSystem;
+      final os = Platform.operatingSystem;
+      return os.length > 100 ? os.substring(0, 100) : os;
     } catch (_) {
       return 'unknown';
     }
