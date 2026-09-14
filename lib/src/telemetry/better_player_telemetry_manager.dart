@@ -187,7 +187,9 @@ class BetterPlayerTelemetryManager {
       request.headers.contentType = ContentType.json;
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       config.headers?.forEach((key, value) {
-        request.headers.set(key, value);
+        if (value != null) {
+          request.headers.set(key, value);
+        }
       });
 
       final jsonBytes = utf8.encode(jsonEncode(payload));
@@ -201,15 +203,18 @@ class BetterPlayerTelemetryManager {
         _sessionStartRetryDelay = const Duration(seconds: 2);
         // Trigger immediate send of any observations queued during session start
         _sendPendingBatches(isFinal: false);
-      } else if (response.statusCode == 400 || response.statusCode == 409) {
-        BetterPlayerUtils.log(
-          'Telemetry session start rejected with status ${response.statusCode}. Halting retries.',
-        );
-        _sessionStartRetryTimer?.cancel();
+        await response.drain<void>();
       } else {
-        _scheduleSessionStartRetry();
+        final errorBody = await response.transform(utf8.decoder).join();
+        BetterPlayerUtils.log(
+          'Telemetry session start rejected with status ${response.statusCode}: $errorBody',
+        );
+        if (response.statusCode == 400 || response.statusCode == 409) {
+          _sessionStartRetryTimer?.cancel();
+        } else {
+          _scheduleSessionStartRetry();
+        }
       }
-      await response.drain<void>();
     } catch (e) {
       BetterPlayerUtils.log('Telemetry session start failed: $e');
       _scheduleSessionStartRetry();
@@ -696,7 +701,9 @@ class BetterPlayerTelemetryManager {
       request.headers.contentType = ContentType.json;
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       config.headers?.forEach((key, value) {
-        request.headers.set(key, value);
+        if (value != null) {
+          request.headers.set(key, value);
+        }
       });
 
       final jsonBytes = utf8.encode(jsonEncode(batch.toMap()));
@@ -705,23 +712,31 @@ class BetterPlayerTelemetryManager {
 
       final response = await request.close();
       final statusCode = response.statusCode;
-      await response.drain<void>();
 
       if (statusCode >= 200 && statusCode < 300) {
+        await response.drain<void>();
         return true;
-      } else if (statusCode == 404) {
+      }
+
+      final errorBody = await response.transform(utf8.decoder).join();
+      if (statusCode == 404) {
         // Session not found on backend! Re-dispatch session start then retry
         BetterPlayerUtils.log(
-          'Telemetry batch 404: Session not found, re-registering session',
+          'Telemetry batch 404: Session not found ($errorBody), re-registering session',
         );
         _sessionStartCompleted = false;
         _dispatchSessionStart();
         return false;
       } else if (statusCode == 400) {
         // Bad request - check fields, don't endlessly retry same invalid batch
-        BetterPlayerUtils.log('Telemetry batch rejected with HTTP 400: $batch');
+        BetterPlayerUtils.log(
+          'Telemetry batch rejected with HTTP 400: $errorBody (payload: $batch)',
+        );
         return true; // Discard invalid batch
       } else {
+        BetterPlayerUtils.log(
+          'Telemetry batch upload failed with status $statusCode: $errorBody',
+        );
         return false;
       }
     } catch (e) {

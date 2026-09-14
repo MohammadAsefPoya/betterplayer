@@ -110,6 +110,7 @@ class BetterPlayerTelemetryUtils {
 
   /// Safely resolves operating system name, clamped to max 100 characters.
   static String getOperatingSystem() {
+    if (kIsWeb) return 'web';
     try {
       final os = Platform.operatingSystem;
       return os.length > 100 ? os.substring(0, 100) : os;

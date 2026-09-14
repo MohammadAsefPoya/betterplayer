@@ -15,7 +15,7 @@ class BetterPlayerTelemetryConfiguration {
   final String batchEventsPath;
 
   /// Optional HTTP headers sent with each telemetry request (e.g. auth tokens).
-  final Map<String, String>? headers;
+  final Map<String, dynamic>? headers;
 
   /// Interval between taking buffer samples. Defaults to 5 seconds.
   final Duration bufferSampleInterval;
@@ -133,14 +133,14 @@ class BetterPlayerTelemetryData {
         BetterPlayerTelemetryUtils.normalizeDeviceType(deviceType);
     final effectiveOs = (os != null && os!.trim().isNotEmpty)
         ? (os!.trim().length > 100 ? os!.trim().substring(0, 100) : os!.trim())
-        : null;
+        : BetterPlayerTelemetryUtils.getOperatingSystem();
 
     final map = <String, dynamic>{
       'sessionId': sessionId,
       if (effectiveEpisodeId != null) 'episodeId': effectiveEpisodeId,
       'platform': effectivePlatform,
       'deviceType': effectiveDeviceType,
-      if (effectiveOs != null) 'os': effectiveOs,
+      if (effectiveOs.isNotEmpty) 'os': effectiveOs,
       'startedAt': startedAt,
     };
 

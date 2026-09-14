@@ -207,7 +207,7 @@ void main() {
       expect(map['allowedExtra'], equals('safeValue'));
     });
 
-    test('BetterPlayerTelemetryData omits optional os and episodeId if null, and auto-defaults required platform/deviceType', () {
+    test('BetterPlayerTelemetryData omits episodeId if null, and auto-defaults required platform/deviceType and os', () {
       const data = BetterPlayerTelemetryData(
         platform: '   ',
         os: null,
@@ -220,13 +220,25 @@ void main() {
       );
 
       expect(map.containsKey('episodeId'), isFalse);
-      expect(map.containsKey('os'), isFalse);
+      expect(map.containsKey('os'), isTrue);
+      expect(map['os'], equals(BetterPlayerTelemetryUtils.getOperatingSystem()));
       expect(map['platform'], isNotNull);
       expect(BetterPlayerTelemetryUtils.allowedPlatforms.contains(map['platform']), isTrue);
       expect(map['deviceType'], isNotNull);
       expect(BetterPlayerTelemetryUtils.allowedDeviceTypes.contains(map['deviceType']), isTrue);
       expect(map['sessionId'], equals('test-session-id'));
       expect(map['startedAt'], equals('2026-09-10T08:00:00.000Z'));
+    });
+
+    test('BetterPlayerTelemetryData preserves custom os when provided', () {
+      const data = BetterPlayerTelemetryData(
+        os: 'Android 14',
+      );
+      final map = data.toMap(
+        sessionId: 'test-session-id',
+        startedAt: '2026-09-10T08:00:00.000Z',
+      );
+      expect(map['os'], equals('Android 14'));
     });
 
     test('BetterPlayerChunkLoadMetric serializes with required non-null integer level', () {
@@ -518,6 +530,8 @@ void main() {
       expect(receivedStartRequests.length, equals(1));
       expect(receivedStartRequests.first['sessionId'], equals(session2Id));
       expect(receivedStartRequests.first['episodeId'], equals(201));
+      expect(receivedStartRequests.first['os'],
+          equals(BetterPlayerTelemetryUtils.getOperatingSystem()));
 
       // 3. THIRD SETUP: Telemetry is null -> Flushes prior session, stops telemetry
       final ds3 = BetterPlayerDataSource.network('https://example.com/video3.mp4');
@@ -598,6 +612,82 @@ void main() {
       expect(receivedBatchRequests.isNotEmpty, isTrue);
 
       await controller.telemetryManager.dispose(isFinal: true);
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Logs error response body and cancels retries when server returns HTTP 400 Bad Request', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final errorServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      errorServer.listen((HttpRequest request) async {
+        await utf8.decodeStream(request);
+        request.response
+          ..statusCode = HttpStatus.badRequest
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({'message': ['episodeId must not be less than 1']}))
+          ..close();
+      });
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${errorServer.address.host}:${errorServer.port}',
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(controller.telemetryManager.isSessionStartCompleted, isFalse);
+
+      await controller.telemetryManager.dispose(isFinal: false);
+      controller.dispose(forceDispose: true);
+      await errorServer.close(force: true);
+    });
+
+    test('Accepts Map<String, dynamic> in BetterPlayerTelemetryConfiguration headers and dispatches them', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final dynamicHeaders = <String, dynamic>{
+        'x-is-guest': true,
+        'Authorization': 'Bearer test_token',
+        'X-Profile-Id': '12345678-1234-4234-8234-123456789abc',
+        'X-Numeric-Header': 42,
+        'X-Null-Header': null,
+      };
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        headers: dynamicHeaders,
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 1),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      expect(receivedStartRequests.length, equals(1));
+      final startHeader = receivedStartHeaders.first;
+      expect(startHeader.value('x-is-guest'), equals('true'));
+      expect(startHeader.value('authorization'), equals('Bearer test_token'));
+      expect(startHeader.value('x-profile-id'), equals('12345678-1234-4234-8234-123456789abc'));
+      expect(startHeader.value('x-numeric-header'), equals('42'));
+      expect(startHeader.value('x-null-header'), isNull);
+
+      await controller.telemetryManager.dispose(isFinal: false);
       controller.dispose(forceDispose: true);
     });
   });
