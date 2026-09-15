@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'better_player_mock_controller.dart';
 import 'better_player_test_utils.dart';
 import 'mock_method_channel.dart';
+import 'mock_video_player_controller.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -46,45 +47,65 @@ void main() {
       expect(set.length, equals(1000));
     });
 
-    test('getOperatingSystem returns non-empty string and clamps to 100 chars', () {
+    test('getOperatingSystem returns non-empty string and clamps to 100 chars',
+        () {
       final os = BetterPlayerTelemetryUtils.getOperatingSystem();
       expect(os.isNotEmpty, isTrue);
       expect(os.length, lessThanOrEqualTo(100));
     });
 
     test('normalizePlatform validates and normalizes platforms', () {
-      expect(BetterPlayerTelemetryUtils.normalizePlatform('android'), equals('ANDROID'));
-      expect(BetterPlayerTelemetryUtils.normalizePlatform('ios'), equals('IOS'));
-      expect(BetterPlayerTelemetryUtils.normalizePlatform('web'), equals('WEB'));
-      expect(BetterPlayerTelemetryUtils.normalizePlatform('android_tv'), equals('ANDROID_TV'));
-      expect(BetterPlayerTelemetryUtils.normalizePlatform('old_web_tv'), equals('OLD_WEB_TV'));
+      expect(BetterPlayerTelemetryUtils.normalizePlatform('android'),
+          equals('ANDROID'));
+      expect(
+          BetterPlayerTelemetryUtils.normalizePlatform('ios'), equals('IOS'));
+      expect(
+          BetterPlayerTelemetryUtils.normalizePlatform('web'), equals('WEB'));
+      expect(BetterPlayerTelemetryUtils.normalizePlatform('android_tv'),
+          equals('ANDROID_TV'));
+      expect(BetterPlayerTelemetryUtils.normalizePlatform('old_web_tv'),
+          equals('OLD_WEB_TV'));
 
       // Invalid/empty fallback
-      final defaultPlatform = BetterPlayerTelemetryUtils.resolveDefaultPlatform();
-      expect(BetterPlayerTelemetryUtils.normalizePlatform(null), equals(defaultPlatform));
-      expect(BetterPlayerTelemetryUtils.normalizePlatform(''), equals(defaultPlatform));
-      expect(BetterPlayerTelemetryUtils.normalizePlatform('invalid_platform'), equals(defaultPlatform));
+      final defaultPlatform =
+          BetterPlayerTelemetryUtils.resolveDefaultPlatform();
+      expect(BetterPlayerTelemetryUtils.normalizePlatform(null),
+          equals(defaultPlatform));
+      expect(BetterPlayerTelemetryUtils.normalizePlatform(''),
+          equals(defaultPlatform));
+      expect(BetterPlayerTelemetryUtils.normalizePlatform('invalid_platform'),
+          equals(defaultPlatform));
     });
 
     test('normalizeDeviceType validates and normalizes device types', () {
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('mobile'), equals('MOBILE'));
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('tablet'), equals('TABLET'));
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('desktop'), equals('DESKTOP'));
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('tv'), equals('TV'));
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('unknown'), equals('UNKNOWN'));
+      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('mobile'),
+          equals('MOBILE'));
+      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('tablet'),
+          equals('TABLET'));
+      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('desktop'),
+          equals('DESKTOP'));
+      expect(
+          BetterPlayerTelemetryUtils.normalizeDeviceType('tv'), equals('TV'));
+      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('unknown'),
+          equals('UNKNOWN'));
 
       // Invalid/empty fallback
-      final defaultDeviceType = BetterPlayerTelemetryUtils.resolveDefaultDeviceType();
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType(null), equals(defaultDeviceType));
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType(''), equals(defaultDeviceType));
-      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('watch'), equals(defaultDeviceType));
+      final defaultDeviceType =
+          BetterPlayerTelemetryUtils.resolveDefaultDeviceType();
+      expect(BetterPlayerTelemetryUtils.normalizeDeviceType(null),
+          equals(defaultDeviceType));
+      expect(BetterPlayerTelemetryUtils.normalizeDeviceType(''),
+          equals(defaultDeviceType));
+      expect(BetterPlayerTelemetryUtils.normalizeDeviceType('watch'),
+          equals(defaultDeviceType));
     });
 
     test('normalizeEpisodeId parses valid positive integers', () {
       expect(BetterPlayerTelemetryUtils.normalizeEpisodeId(123), equals(123));
       expect(BetterPlayerTelemetryUtils.normalizeEpisodeId('456'), equals(456));
       expect(BetterPlayerTelemetryUtils.normalizeEpisodeId(789.0), equals(789));
-      expect(BetterPlayerTelemetryUtils.normalizeEpisodeId(-5), equals(1)); // at least 1
+      expect(BetterPlayerTelemetryUtils.normalizeEpisodeId(-5),
+          equals(1)); // at least 1
       expect(BetterPlayerTelemetryUtils.normalizeEpisodeId('0'), equals(1));
       expect(BetterPlayerTelemetryUtils.normalizeEpisodeId('invalid'), isNull);
       expect(BetterPlayerTelemetryUtils.normalizeEpisodeId(null), isNull);
@@ -103,7 +124,8 @@ void main() {
         'bearer_token': 'secret456',
         'password': 'pass',
         'userSignature': 'sig',
-        'mediaUrl': 'https://cdn.example.com/segment.ts?token=xyz&signature=123',
+        'mediaUrl':
+            'https://cdn.example.com/segment.ts?token=xyz&signature=123',
       };
 
       final sanitized =
@@ -116,7 +138,8 @@ void main() {
       expect(sanitized.containsKey('password'), isFalse);
       expect(sanitized.containsKey('userSignature'), isFalse);
       // Stripped query parameters from URL
-      expect(sanitized['mediaUrl'], equals('https://cdn.example.com/segment.ts'));
+      expect(
+          sanitized['mediaUrl'], equals('https://cdn.example.com/segment.ts'));
     });
 
     test('sanitizeEventDetails enforces max size limit', () {
@@ -139,7 +162,8 @@ void main() {
       );
       expect(
         config.startSessionUri.toString(),
-        equals('https://telemetry.example.com/api/v1/statistics/sessions/start'),
+        equals(
+            'https://telemetry.example.com/api/v1/statistics/sessions/start'),
       );
       expect(
         config.batchEventsUri.toString(),
@@ -147,7 +171,9 @@ void main() {
       );
     });
 
-    test('BetterPlayerTelemetryConfiguration with null or empty baseUrl has hasValue = false and null URIs', () {
+    test(
+        'BetterPlayerTelemetryConfiguration with null or empty baseUrl has hasValue = false and null URIs',
+        () {
       const configEmpty = BetterPlayerTelemetryConfiguration();
       expect(configEmpty.baseUrl, isNull);
       expect(configEmpty.hasValue, isFalse);
@@ -166,7 +192,9 @@ void main() {
       expect(configDisabled.hasValue, isFalse);
     });
 
-    test('BetterPlayerTelemetryData serializes to map correctly with normalized fields', () {
+    test(
+        'BetterPlayerTelemetryData serializes to map correctly with normalized fields',
+        () {
       const data = BetterPlayerTelemetryData(
         episodeId: '123',
         platform: 'android',
@@ -186,7 +214,8 @@ void main() {
       expect(map['startedAt'], equals('2026-09-10T08:00:00.000Z'));
     });
 
-    test('BetterPlayerTelemetryData strips userId and profileId from JSON body', () {
+    test('BetterPlayerTelemetryData strips userId and profileId from JSON body',
+        () {
       const data = BetterPlayerTelemetryData(
         episodeId: 100,
         extra: {
@@ -207,7 +236,9 @@ void main() {
       expect(map['allowedExtra'], equals('safeValue'));
     });
 
-    test('BetterPlayerTelemetryData omits episodeId if null, and auto-defaults required platform/deviceType and os', () {
+    test(
+        'BetterPlayerTelemetryData omits episodeId if null, and auto-defaults required platform/deviceType and os',
+        () {
       const data = BetterPlayerTelemetryData(
         platform: '   ',
         os: null,
@@ -221,11 +252,17 @@ void main() {
 
       expect(map.containsKey('episodeId'), isFalse);
       expect(map.containsKey('os'), isTrue);
-      expect(map['os'], equals(BetterPlayerTelemetryUtils.getOperatingSystem()));
+      expect(
+          map['os'], equals(BetterPlayerTelemetryUtils.getOperatingSystem()));
       expect(map['platform'], isNotNull);
-      expect(BetterPlayerTelemetryUtils.allowedPlatforms.contains(map['platform']), isTrue);
+      expect(
+          BetterPlayerTelemetryUtils.allowedPlatforms.contains(map['platform']),
+          isTrue);
       expect(map['deviceType'], isNotNull);
-      expect(BetterPlayerTelemetryUtils.allowedDeviceTypes.contains(map['deviceType']), isTrue);
+      expect(
+          BetterPlayerTelemetryUtils.allowedDeviceTypes
+              .contains(map['deviceType']),
+          isTrue);
       expect(map['sessionId'], equals('test-session-id'));
       expect(map['startedAt'], equals('2026-09-10T08:00:00.000Z'));
     });
@@ -241,7 +278,9 @@ void main() {
       expect(map['os'], equals('Android 14'));
     });
 
-    test('BetterPlayerChunkLoadMetric serializes with required non-null integer level', () {
+    test(
+        'BetterPlayerChunkLoadMetric serializes with required non-null integer level',
+        () {
       const chunk = BetterPlayerChunkLoadMetric(
         chunkSeq: 0,
         level: 1,
@@ -314,7 +353,9 @@ void main() {
   });
 
   group('BetterPlayerController Telemetry Dynamic Switching Tests', () {
-    test('sessionId generates a valid UUID v4 and updates on each new viewing session', () async {
+    test(
+        'sessionId generates a valid UUID v4 and updates on each new viewing session',
+        () async {
       final mockVideoController =
           BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
@@ -343,7 +384,8 @@ void main() {
     });
 
     test('BetterPlayerDataSource has null telemetry by default', () {
-      final ds = BetterPlayerDataSource.network('https://example.com/video.mp4');
+      final ds =
+          BetterPlayerDataSource.network('https://example.com/video.mp4');
       expect(ds.telemetryConfiguration, isNull);
     });
   });
@@ -394,7 +436,65 @@ void main() {
       await server.close(force: true);
     });
 
-    test('Dispatches session start and batch events with correct Content-Type and Accept headers', () async {
+    List<Map<String, dynamic>> allPlaybackEvents() {
+      return receivedBatchRequests
+          .expand((batch) => batch['playbackEvents'] as List)
+          .cast<Map<String, dynamic>>()
+          .toList();
+    }
+
+    List<Map<String, dynamic>> allWatchedRanges() {
+      return receivedBatchRequests
+          .expand((batch) => batch['watchedRanges'] as List)
+          .cast<Map<String, dynamic>>()
+          .toList();
+    }
+
+    List<Map<String, dynamic>> allChunkLoads() {
+      return receivedBatchRequests
+          .expand((batch) => batch['chunkLoads'] as List)
+          .cast<Map<String, dynamic>>()
+          .toList();
+    }
+
+    BetterPlayerNetworkLog completedMediaChunkLog({
+      required String id,
+      required int bitrate,
+      required int width,
+      required int height,
+      required int mediaStartTimeMs,
+      required int mediaEndTimeMs,
+    }) {
+      return BetterPlayerNetworkLog(
+        id: id,
+        url: 'https://cdn.example.com/$id.ts',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        bytesLoaded: 500000,
+        durationMs: 300,
+        timestamp: DateTime.now(),
+        bitrate: bitrate,
+        width: width,
+        height: height,
+        mediaStartTimeMs: mediaStartTimeMs,
+        mediaEndTimeMs: mediaEndTimeMs,
+      );
+    }
+
+    Future<void> progressAt(
+      BetterPlayerMockController controller,
+      MockVideoPlayerController mockVideo,
+      int seconds,
+    ) async {
+      await mockVideo.seekTo(Duration(seconds: seconds));
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+    }
+
+    test(
+        'Dispatches session start and batch events with correct Content-Type and Accept headers',
+        () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
         controller: mockVideo,
@@ -491,7 +591,9 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
-    test('Dynamic setupDataSource state transitions: Null -> Valid -> Null -> Valid', () async {
+    test(
+        'Dynamic setupDataSource state transitions: Null -> Valid -> Null -> Valid',
+        () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
         controller: mockVideo,
@@ -505,7 +607,8 @@ void main() {
       );
 
       // 1. FIRST SETUP: Telemetry is null -> No requests sent
-      final ds1 = BetterPlayerDataSource.network('https://example.com/video1.mp4');
+      final ds1 =
+          BetterPlayerDataSource.network('https://example.com/video1.mp4');
       await controller.setupDataSource(ds1);
 
       controller.telemetryManager.recordPlaybackEvent(
@@ -534,12 +637,16 @@ void main() {
           equals(BetterPlayerTelemetryUtils.getOperatingSystem()));
 
       // 3. THIRD SETUP: Telemetry is null -> Flushes prior session, stops telemetry
-      final ds3 = BetterPlayerDataSource.network('https://example.com/video3.mp4');
+      final ds3 =
+          BetterPlayerDataSource.network('https://example.com/video3.mp4');
       await controller.setupDataSource(ds3);
 
       await Future.delayed(const Duration(milliseconds: 150));
       // Prior session had an isFinal batch sent
-      expect(receivedBatchRequests.any((b) => b['sessionId'] == session2Id && b['isFinal'] == true), isTrue);
+      expect(
+          receivedBatchRequests
+              .any((b) => b['sessionId'] == session2Id && b['isFinal'] == true),
+          isTrue);
 
       final startRequestsCountBefore = receivedStartRequests.length;
       controller.telemetryManager.recordPlaybackEvent(
@@ -560,7 +667,8 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 150));
       expect(session4Id, isNot(equals(session2Id)));
-      expect(receivedStartRequests.length, equals(startRequestsCountBefore + 1));
+      expect(
+          receivedStartRequests.length, equals(startRequestsCountBefore + 1));
       expect(receivedStartRequests.last['sessionId'], equals(session4Id));
       expect(receivedStartRequests.last['episodeId'], equals(401));
 
@@ -568,7 +676,9 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
-    test('Watched range retains same rangeId during continuous playback and splits on seek', () async {
+    test(
+        'Watched range retains same rangeId during continuous playback and splits on seek',
+        () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
         controller: mockVideo,
@@ -615,19 +725,584 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
-    test('Logs error response body and cancels retries when server returns HTTP 400 Bad Request', () async {
+    test('Pause and resume within 15 seconds keep one watched range', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+
+      for (final seconds in <int>[2, 4, 6, 8, 10]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await mockVideo.pause();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.pause),
+      );
+
+      await mockVideo.seekTo(const Duration(seconds: 20));
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      await progressAt(controller, mockVideo, 20);
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final seekEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'SEEK')
+          .toList();
+      expect(seekEvents, isEmpty);
+
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(1));
+      expect(watchedRanges.single['fromS'], equals(0.0));
+      expect(watchedRanges.single['toS'], equals(20.0));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Duplicate playback action events are only sent once per batch',
+        () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
         controller: mockVideo,
       );
 
-      final errorServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PAUSE',
+        positionS: 12.0,
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PAUSE',
+        positionS: 12.0,
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final pauseEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'PAUSE')
+          .toList();
+      expect(pauseEvents.length, equals(1));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Duplicate pause and resume events are suppressed across other events',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+
+      await mockVideo.pause();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.pause),
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'ERROR',
+        positionS: 0.0,
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.pause),
+      );
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'ERROR',
+        positionS: 0.0,
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final playbackEvents = allPlaybackEvents();
+      expect(
+        playbackEvents.where((event) => event['type'] == 'PAUSE').length,
+        equals(1),
+      );
+      expect(
+        playbackEvents.where((event) => event['type'] == 'RESUME').length,
+        equals(1),
+      );
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Pause and resume are sent once for each real transition', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+
+      for (int i = 0; i < 2; i++) {
+        await mockVideo.pause();
+        controller.telemetryManager.handlePlayerEvent(
+          BetterPlayerEvent(BetterPlayerEventType.pause),
+        );
+        await mockVideo.play();
+        controller.telemetryManager.handlePlayerEvent(
+          BetterPlayerEvent(BetterPlayerEventType.play),
+        );
+      }
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final playbackEvents = allPlaybackEvents();
+      expect(
+        playbackEvents.where((event) => event['type'] == 'PAUSE').length,
+        equals(2),
+      );
+      expect(
+        playbackEvents.where((event) => event['type'] == 'RESUME').length,
+        equals(2),
+      );
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Auto quality reports actual loaded level and skips duplicates',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+      controller.betterPlayerAsmsTracks.addAll(<BetterPlayerAsmsTrack>[
+        BetterPlayerAsmsTrack.defaultTrack(),
+        BetterPlayerAsmsTrack('240p', 426, 240, 400000, 0, '', 'video/mp4'),
+        BetterPlayerAsmsTrack('720p', 1280, 720, 2500000, 0, '', 'video/mp4'),
+      ]);
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.handleNetworkLog(
+        completedMediaChunkLog(
+          id: 'chunk-720-a',
+          bitrate: 2500000,
+          width: 1280,
+          height: 720,
+          mediaStartTimeMs: 0,
+          mediaEndTimeMs: 6000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        completedMediaChunkLog(
+          id: 'chunk-720-b',
+          bitrate: 2500000,
+          width: 1280,
+          height: 720,
+          mediaStartTimeMs: 6000,
+          mediaEndTimeMs: 12000,
+        ),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final qualityEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'QUALITY_SWITCH')
+          .toList();
+      expect(qualityEvents.length, equals(1));
+      expect(qualityEvents.single['details']['fromLevel'], equals(0));
+      expect(qualityEvents.single['details']['toLevel'], equals(2));
+      expect(qualityEvents.single['details']['bitrate'], equals(2500000));
+      expect(qualityEvents.single['details']['width'], equals(1280));
+      expect(qualityEvents.single['details']['height'], equals(720));
+
+      final chunkLoads = allChunkLoads();
+      expect(chunkLoads.map((chunk) => chunk['level']).toList(),
+          equals(<int>[2, 2]));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Auto quality sends a switch only when actual loaded level changes',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+      controller.betterPlayerAsmsTracks.addAll(<BetterPlayerAsmsTrack>[
+        BetterPlayerAsmsTrack.defaultTrack(),
+        BetterPlayerAsmsTrack('240p', 426, 240, 400000, 0, '', 'video/mp4'),
+        BetterPlayerAsmsTrack('720p', 1280, 720, 2500000, 0, '', 'video/mp4'),
+      ]);
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.handleNetworkLog(
+        completedMediaChunkLog(
+          id: 'chunk-240',
+          bitrate: 400000,
+          width: 426,
+          height: 240,
+          mediaStartTimeMs: 0,
+          mediaEndTimeMs: 6000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        completedMediaChunkLog(
+          id: 'chunk-720',
+          bitrate: 2500000,
+          width: 1280,
+          height: 720,
+          mediaStartTimeMs: 6000,
+          mediaEndTimeMs: 12000,
+        ),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final qualityEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'QUALITY_SWITCH')
+          .toList();
+      expect(qualityEvents.length, equals(2));
+      expect(qualityEvents.first['details']['fromLevel'], equals(0));
+      expect(qualityEvents.first['details']['toLevel'], equals(1));
+      expect(qualityEvents.last['details']['fromLevel'], equals(1));
+      expect(qualityEvents.last['details']['toLevel'], equals(2));
+      expect(
+        qualityEvents.any(
+          (event) =>
+              event['details']['fromLevel'] == event['details']['toLevel'],
+        ),
+        isFalse,
+      );
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Manual same-level quality events are ignored', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+      final track720 =
+          BetterPlayerAsmsTrack('720p', 1280, 720, 2500000, 0, '', 'video/mp4');
+      controller.betterPlayerAsmsTracks.addAll(<BetterPlayerAsmsTrack>[
+        BetterPlayerAsmsTrack.defaultTrack(),
+        track720,
+      ]);
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.handleNetworkLog(
+        completedMediaChunkLog(
+          id: 'chunk-720',
+          bitrate: 2500000,
+          width: 1280,
+          height: 720,
+          mediaStartTimeMs: 0,
+          mediaEndTimeMs: 6000,
+        ),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(
+          BetterPlayerEventType.changedTrack,
+          parameters: <String, dynamic>{
+            'bitrate': track720.bitrate,
+            'width': track720.width,
+            'height': track720.height,
+          },
+        ),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(
+          BetterPlayerEventType.changedResolution,
+          parameters: <String, dynamic>{
+            'width': track720.width,
+            'height': track720.height,
+          },
+        ),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final qualityEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'QUALITY_SWITCH')
+          .toList();
+      expect(qualityEvents.length, equals(1));
+      expect(qualityEvents.single['details']['fromLevel'], equals(0));
+      expect(qualityEvents.single['details']['toLevel'], equals(1));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Resume more than 15 seconds from pause position counts as seek',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+
+      for (final seconds in <int>[2, 4, 6, 8, 10]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await mockVideo.pause();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.pause),
+      );
+
+      await mockVideo.seekTo(const Duration(seconds: 30));
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      for (final seconds in <int>[32, 34, 35]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final seekEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'SEEK')
+          .toList();
+      expect(seekEvents.length, equals(1));
+      expect(seekEvents.single['positionS'], equals(10.0));
+      expect(seekEvents.single['details']['fromS'], equals(10.0));
+      expect(seekEvents.single['details']['toS'], equals(30.0));
+
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(2));
+      expect(watchedRanges.first['fromS'], equals(0.0));
+      expect(watchedRanges.first['toS'], equals(10.0));
+      expect(watchedRanges.last['fromS'], equals(30.0));
+      expect(watchedRanges.last['toS'], equals(35.0));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test(
+        'Seek uses real from and to positions and ignores jumps within 15 seconds',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+
+      for (final seconds in <int>[2, 4, 6, 8, 10]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await controller.seekTo(const Duration(seconds: 24));
+      await controller.seekTo(const Duration(seconds: 45));
+
+      for (final seconds in <int>[47, 49, 50]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final seekEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'SEEK')
+          .toList();
+      expect(seekEvents.length, equals(1));
+      expect(seekEvents.single['positionS'], equals(24.0));
+      expect(seekEvents.single['details']['fromS'], equals(24.0));
+      expect(seekEvents.single['details']['toS'], equals(45.0));
+
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(2));
+      expect(watchedRanges.first['fromS'], equals(0.0));
+      expect(watchedRanges.first['toS'], equals(24.0));
+      expect(watchedRanges.last['fromS'], equals(45.0));
+      expect(watchedRanges.last['toS'], equals(50.0));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test(
+        'Logs error response body and cancels retries when server returns HTTP 400 Bad Request',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final errorServer =
+          await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       errorServer.listen((HttpRequest request) async {
         await utf8.decodeStream(request);
         request.response
           ..statusCode = HttpStatus.badRequest
           ..headers.contentType = ContentType.json
-          ..write(jsonEncode({'message': ['episodeId must not be less than 1']}))
+          ..write(jsonEncode({
+            'message': ['episodeId must not be less than 1']
+          }))
           ..close();
       });
 
@@ -651,7 +1326,9 @@ void main() {
       await errorServer.close(force: true);
     });
 
-    test('Accepts Map<String, dynamic> in BetterPlayerTelemetryConfiguration headers and dispatches them', () async {
+    test(
+        'Accepts Map<String, dynamic> in BetterPlayerTelemetryConfiguration headers and dispatches them',
+        () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
         controller: mockVideo,
@@ -683,7 +1360,8 @@ void main() {
       final startHeader = receivedStartHeaders.first;
       expect(startHeader.value('x-is-guest'), equals('true'));
       expect(startHeader.value('authorization'), equals('Bearer test_token'));
-      expect(startHeader.value('x-profile-id'), equals('12345678-1234-4234-8234-123456789abc'));
+      expect(startHeader.value('x-profile-id'),
+          equals('12345678-1234-4234-8234-123456789abc'));
       expect(startHeader.value('x-numeric-header'), equals('42'));
       expect(startHeader.value('x-null-header'), isNull);
 

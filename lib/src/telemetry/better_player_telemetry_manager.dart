@@ -14,6 +14,9 @@ import 'better_player_telemetry_utils.dart';
 /// Manages telemetry collection, buffering, and batch uploading according to
 /// the Playback Telemetry Client Guide.
 class BetterPlayerTelemetryManager {
+  static const double _seekDiscontinuityThresholdS = 15.0;
+  static const Duration _playbackEventDedupWindow = Duration(milliseconds: 500);
+
   final BetterPlayerController controller;
 
   /// The unique session ID for the currently active viewing session.
@@ -38,13 +41,22 @@ class BetterPlayerTelemetryManager {
   bool _sessionStartCompleted = false;
   bool _isSendingBatch = false;
   bool _hasPlaybackStarted = false;
+  _TelemetryPlaybackState _playbackState = _TelemetryPlaybackState.unknown;
   int _chunkSeqCounter = 0;
   String? _lastCdnHost;
 
   // Active watched range tracking
   BetterPlayerWatchedRangeMetric? _activeWatchedRange;
   double? _lastWatchedPositionS;
+  double? _pausedPositionS;
   int? _currentQualityLevel;
+  int? _currentQualityBitrate;
+  int? _currentQualityWidth;
+  int? _currentQualityHeight;
+  String? _lastPlaybackEventType;
+  double? _lastPlaybackEventPositionS;
+  Map<String, dynamic>? _lastPlaybackEventDetails;
+  DateTime? _lastPlaybackEventAt;
 
   // Queues for pending observations
   final List<BetterPlayerChunkLoadMetric> _pendingChunkLoads = [];
@@ -97,11 +109,20 @@ class BetterPlayerTelemetryManager {
     _sessionStartInitiated = false;
     _sessionStartCompleted = false;
     _hasPlaybackStarted = false;
+    _playbackState = _TelemetryPlaybackState.unknown;
     _chunkSeqCounter = 0;
     _lastCdnHost = null;
     _activeWatchedRange = null;
     _lastWatchedPositionS = null;
+    _pausedPositionS = null;
     _currentQualityLevel = null;
+    _currentQualityBitrate = null;
+    _currentQualityWidth = null;
+    _currentQualityHeight = null;
+    _lastPlaybackEventType = null;
+    _lastPlaybackEventPositionS = null;
+    _lastPlaybackEventDetails = null;
+    _lastPlaybackEventAt = null;
     _retryBatch = null;
     _pendingChunkLoads.clear();
     _pendingBufferSamples.clear();
@@ -251,7 +272,8 @@ class BetterPlayerTelemetryManager {
 
       case BetterPlayerEventType.seekTo:
         final toDuration = event.parameters?['duration'] as Duration?;
-        _handleSeek(currentPositionS, toDuration);
+        final fromDuration = event.parameters?['fromDuration'] as Duration?;
+        _handleSeek(currentPositionS, toDuration, fromDuration);
         break;
 
       case BetterPlayerEventType.bufferingStart:
@@ -317,10 +339,22 @@ class BetterPlayerTelemetryManager {
       final startS = max(0.0, log.mediaStartTimeMs! / 1000.0);
       final endS = max(startS, log.mediaEndTimeMs! / 1000.0);
       final chunkSeq = _chunkSeqCounter++;
+      final qualitySnapshot = _resolveQualitySnapshot(
+        bitrate: log.bitrate,
+        width: log.width,
+        height: log.height,
+      );
+
+      if (qualitySnapshot != null) {
+        _updateQualityLevel(
+          qualitySnapshot,
+          positionS: _getCurrentPositionSeconds(),
+        );
+      }
 
       final chunkMetric = BetterPlayerChunkLoadMetric(
         chunkSeq: chunkSeq,
-        level: _resolveQualityLevelIndex(log.bitrate, log.height),
+        level: qualitySnapshot?.level ?? _currentQualityLevel ?? 0,
         startS: startS,
         endS: endS,
         bytes: max(0, log.bytesLoaded),
@@ -332,20 +366,71 @@ class BetterPlayerTelemetryManager {
     }
   }
 
-  int _resolveQualityLevelIndex(int? bitrate, int? height) {
+  _QualitySnapshot? _resolveQualitySnapshot({
+    int? bitrate,
+    int? width,
+    int? height,
+  }) {
     final tracks = controller.betterPlayerAsmsTracks;
     if (tracks.isNotEmpty) {
       for (int i = 0; i < tracks.length; i++) {
         final track = tracks[i];
-        if (bitrate != null && track.bitrate == bitrate) {
-          return i;
+        if (_isAutoTrack(
+          bitrate: track.bitrate,
+          width: track.width,
+          height: track.height,
+        )) {
+          continue;
         }
-        if (height != null && track.height == height) {
-          return i;
+        if (bitrate != null && bitrate > 0 && track.bitrate == bitrate) {
+          return _QualitySnapshot(
+            level: i,
+            bitrate: track.bitrate ?? bitrate,
+            width: track.width ?? width,
+            height: track.height ?? height,
+          );
+        }
+      }
+
+      for (int i = 0; i < tracks.length; i++) {
+        final track = tracks[i];
+        if (_isAutoTrack(
+          bitrate: track.bitrate,
+          width: track.width,
+          height: track.height,
+        )) {
+          continue;
+        }
+        if (height != null && height > 0 && track.height == height) {
+          return _QualitySnapshot(
+            level: i,
+            bitrate: track.bitrate ?? bitrate,
+            width: track.width ?? width,
+            height: track.height ?? height,
+          );
         }
       }
     }
-    return _currentQualityLevel ?? 0;
+
+    if (_hasConcreteQuality(bitrate: bitrate, width: width, height: height) &&
+        _currentQualityLevel != null) {
+      return _QualitySnapshot(
+        level: _currentQualityLevel!,
+        bitrate: bitrate ?? _currentQualityBitrate,
+        width: width ?? _currentQualityWidth,
+        height: height ?? _currentQualityHeight,
+      );
+    }
+
+    return null;
+  }
+
+  bool _hasConcreteQuality({int? bitrate, int? width, int? height}) {
+    return (bitrate ?? 0) > 0 || (width ?? 0) > 0 || (height ?? 0) > 0;
+  }
+
+  bool _isAutoTrack({int? bitrate, int? width, int? height}) {
+    return (bitrate ?? 0) == 0 && (width ?? 0) == 0 && (height ?? 0) == 0;
   }
 
   bool get _isControllerPlaying {
@@ -358,32 +443,55 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handlePlay(double positionS) {
-    if (_hasPlaybackStarted) {
+    final pausedPositionS = _pausedPositionS;
+    final wasPaused = _playbackState == _TelemetryPlaybackState.paused;
+    if (_hasPlaybackStarted && wasPaused) {
+      _handleResumePosition(positionS);
       recordPlaybackEvent(
         type: 'RESUME',
         positionS: positionS,
       );
     }
-    _startOrExtendWatchedRange(positionS);
+    _playbackState = _TelemetryPlaybackState.playing;
+    _pausedPositionS = null;
+    if (pausedPositionS != null &&
+        (positionS - pausedPositionS).abs() <= _seekDiscontinuityThresholdS) {
+      _continueWatchedRangeThroughPosition(positionS);
+    } else {
+      _startOrExtendWatchedRange(positionS);
+    }
   }
 
   void _handlePause(double positionS) {
-    _finalizeWatchedRange(positionS);
+    _pausedPositionS = positionS;
+    if (_activeWatchedRange != null) {
+      _activeWatchedRange = _activeWatchedRange!.copyWith(toS: positionS);
+      _lastWatchedPositionS = positionS;
+    }
+    if (_playbackState == _TelemetryPlaybackState.paused) {
+      return;
+    }
+    _playbackState = _TelemetryPlaybackState.paused;
     recordPlaybackEvent(
       type: 'PAUSE',
       positionS: positionS,
     );
   }
 
-  void _handleSeek(double currentPositionS, Duration? toDuration) {
-    _finalizeWatchedRange(currentPositionS);
-    final toPositionS = (toDuration?.inMilliseconds ?? 0) / 1000.0;
+  void _handleSeekWithPositions(double fromPositionS, double toPositionS) {
+    final seekDistanceS = (toPositionS - fromPositionS).abs();
+    if (seekDistanceS <= _seekDiscontinuityThresholdS) {
+      _continueWatchedRangeThroughPosition(toPositionS);
+      return;
+    }
+
+    _finalizeWatchedRange(fromPositionS);
 
     recordPlaybackEvent(
       type: 'SEEK',
-      positionS: currentPositionS,
+      positionS: fromPositionS,
       details: <String, dynamic>{
-        'fromS': currentPositionS,
+        'fromS': fromPositionS,
         'toS': toPositionS,
       },
     );
@@ -391,6 +499,39 @@ class BetterPlayerTelemetryManager {
     if (_isControllerPlaying) {
       _startOrExtendWatchedRange(toPositionS);
     }
+  }
+
+  void _handleSeek(
+    double currentPositionS,
+    Duration? toDuration,
+    Duration? fromDuration,
+  ) {
+    if (toDuration == null) return;
+
+    final toPositionS = (toDuration?.inMilliseconds ?? 0) / 1000.0;
+    final fromPositionS =
+        (fromDuration?.inMilliseconds ?? (currentPositionS * 1000).round()) /
+            1000.0;
+    _handleSeekWithPositions(fromPositionS, toPositionS);
+  }
+
+  void _handleResumePosition(double positionS) {
+    final pausedPositionS = _pausedPositionS;
+    if (pausedPositionS == null) return;
+
+    final resumeDistanceS = (positionS - pausedPositionS).abs();
+    if (resumeDistanceS <= _seekDiscontinuityThresholdS) return;
+
+    _finalizeWatchedRange(pausedPositionS);
+
+    recordPlaybackEvent(
+      type: 'SEEK',
+      positionS: pausedPositionS,
+      details: <String, dynamic>{
+        'fromS': pausedPositionS,
+        'toS': positionS,
+      },
+    );
   }
 
   void _handleStallStart(double positionS) {
@@ -418,29 +559,55 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handleQualitySwitch(double positionS, BetterPlayerEvent event) {
-    _finalizeWatchedRange(positionS);
+    final snapshot = _resolveQualitySnapshot(
+      bitrate: (event.parameters?['bitrate'] as num?)?.toInt(),
+      width: (event.parameters?['width'] as num?)?.toInt(),
+      height: (event.parameters?['height'] as num?)?.toInt(),
+    );
+    if (snapshot == null) return;
 
-    final track = controller.betterPlayerAsmsTrack;
-    final tracks = controller.betterPlayerAsmsTracks;
-    int? newLevelIndex;
-    if (track != null && tracks.isNotEmpty) {
-      final idx = tracks.indexOf(track);
-      if (idx != -1) newLevelIndex = idx;
-    }
-    newLevelIndex ??= (tracks.isNotEmpty ? 0 : 0);
+    _updateQualityLevel(
+      snapshot,
+      positionS: positionS,
+    );
+  }
 
+  void _updateQualityLevel(
+    _QualitySnapshot snapshot, {
+    required double positionS,
+  }) {
     final oldLevelIndex = _currentQualityLevel ?? 0;
-    _currentQualityLevel = newLevelIndex;
+    if (_currentQualityLevel != null &&
+        _currentQualityLevel == snapshot.level) {
+      _currentQualityBitrate = snapshot.bitrate;
+      _currentQualityWidth = snapshot.width;
+      _currentQualityHeight = snapshot.height;
+      return;
+    }
+
+    if (_currentQualityLevel == null && oldLevelIndex == snapshot.level) {
+      _currentQualityLevel = snapshot.level;
+      _currentQualityBitrate = snapshot.bitrate;
+      _currentQualityWidth = snapshot.width;
+      _currentQualityHeight = snapshot.height;
+      return;
+    }
+
+    _finalizeWatchedRange(positionS);
+    _currentQualityLevel = snapshot.level;
+    _currentQualityBitrate = snapshot.bitrate;
+    _currentQualityWidth = snapshot.width;
+    _currentQualityHeight = snapshot.height;
 
     recordPlaybackEvent(
       type: 'QUALITY_SWITCH',
       positionS: positionS,
       details: <String, dynamic>{
         'fromLevel': oldLevelIndex,
-        'toLevel': newLevelIndex,
-        if (track?.bitrate != null) 'bitrate': track!.bitrate,
-        if (track?.width != null) 'width': track!.width,
-        if (track?.height != null) 'height': track!.height,
+        'toLevel': snapshot.level,
+        if (snapshot.bitrate != null) 'bitrate': snapshot.bitrate,
+        if (snapshot.width != null) 'width': snapshot.width,
+        if (snapshot.height != null) 'height': snapshot.height,
       },
     );
 
@@ -477,6 +644,7 @@ class BetterPlayerTelemetryManager {
     // First frame played — record PLAYBACK_STARTED once per session
     if (!_hasPlaybackStarted && currentPositionS >= 0.0) {
       _hasPlaybackStarted = true;
+      _playbackState = _TelemetryPlaybackState.playing;
       recordPlaybackEvent(
         type: 'PLAYBACK_STARTED',
         positionS: currentPositionS,
@@ -518,6 +686,18 @@ class BetterPlayerTelemetryManager {
     }
   }
 
+  void _continueWatchedRangeThroughPosition(double positionS) {
+    if (_activeWatchedRange == null) {
+      _startOrExtendWatchedRange(positionS);
+      return;
+    }
+
+    _activeWatchedRange = _activeWatchedRange!.copyWith(
+      toS: max(_activeWatchedRange!.toS, positionS),
+    );
+    _lastWatchedPositionS = positionS;
+  }
+
   void _finalizeWatchedRange(double positionS) {
     if (_activeWatchedRange != null) {
       final range = _activeWatchedRange!.copyWith(toS: positionS);
@@ -527,6 +707,7 @@ class BetterPlayerTelemetryManager {
       }
       _activeWatchedRange = null;
       _lastWatchedPositionS = null;
+      _pausedPositionS = null;
     }
   }
 
@@ -551,7 +732,41 @@ class BetterPlayerTelemetryManager {
       details: sanitizedDetails,
     );
 
+    if (_isDuplicatePlaybackEvent(event)) return;
+
     _pendingPlaybackEvents.add(event);
+  }
+
+  bool _isDuplicatePlaybackEvent(BetterPlayerPlaybackEventMetric event) {
+    final now = DateTime.now();
+    final lastAt = _lastPlaybackEventAt;
+    final isDuplicate = _lastPlaybackEventType == event.type &&
+        _lastPlaybackEventPositionS != null &&
+        (event.positionS - _lastPlaybackEventPositionS!).abs() <= 0.25 &&
+        lastAt != null &&
+        now.difference(lastAt) <= _playbackEventDedupWindow &&
+        _mapEquals(_lastPlaybackEventDetails, event.details);
+
+    if (isDuplicate) {
+      _lastPlaybackEventAt = now;
+      return true;
+    }
+
+    _lastPlaybackEventType = event.type;
+    _lastPlaybackEventPositionS = event.positionS;
+    _lastPlaybackEventDetails = Map<String, dynamic>.from(event.details);
+    _lastPlaybackEventAt = now;
+    return false;
+  }
+
+  bool _mapEquals(Map<String, dynamic>? left, Map<String, dynamic>? right) {
+    if (identical(left, right)) return true;
+    if (left == null || right == null) return false;
+    if (left.length != right.length) return false;
+    for (final key in left.keys) {
+      if (!right.containsKey(key) || right[key] != left[key]) return false;
+    }
+    return true;
   }
 
   /// Takes a periodic buffer sample.
@@ -633,8 +848,8 @@ class BetterPlayerTelemetryManager {
       while (_hasPendingData || (isFinal && _pendingPlaybackEvents.isEmpty)) {
         final chunkBatch =
             _takeSublist(_pendingChunkLoads, config.maxChunkLoadsPerBatch);
-        final bufferBatch =
-            _takeSublist(_pendingBufferSamples, config.maxBufferSamplesPerBatch);
+        final bufferBatch = _takeSublist(
+            _pendingBufferSamples, config.maxBufferSamplesPerBatch);
         final watchedBatch = _takeSublist(
             _pendingWatchedRanges, config.maxWatchedRangesPerBatch);
         final eventsBatch = _takeSublist(
@@ -645,8 +860,7 @@ class BetterPlayerTelemetryManager {
         final batch = BetterPlayerTelemetryBatch(
           sessionId: sessionId,
           batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
-          sentAt:
-              BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
+          sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
           isFinal: thisBatchIsFinal,
           chunkLoads: chunkBatch,
           bufferSamples: bufferBatch,
@@ -762,4 +976,24 @@ class BetterPlayerTelemetryManager {
 
     _httpClient.close(force: true);
   }
+}
+
+class _QualitySnapshot {
+  final int level;
+  final int? bitrate;
+  final int? width;
+  final int? height;
+
+  const _QualitySnapshot({
+    required this.level,
+    this.bitrate,
+    this.width,
+    this.height,
+  });
+}
+
+enum _TelemetryPlaybackState {
+  unknown,
+  playing,
+  paused,
 }

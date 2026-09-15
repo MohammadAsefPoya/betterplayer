@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 ///state of Better Player.
 class BetterPlayerController {
   static const String _durationParameter = "duration";
+  static const String _fromDurationParameter = "fromDuration";
   static const String _progressParameter = "progress";
   static const String _bufferedParameter = "buffered";
   static const String _volumeParameter = "volume";
@@ -803,10 +804,15 @@ class BetterPlayerController {
       throw StateError("The video has not been initialized yet.");
     }
 
+    final Duration fromDuration = videoPlayerController!.value.position;
+
     await videoPlayerController!.seekTo(moment);
 
     _postEvent(BetterPlayerEvent(BetterPlayerEventType.seekTo,
-        parameters: <String, dynamic>{_durationParameter: moment}));
+        parameters: <String, dynamic>{
+          _durationParameter: moment,
+          _fromDurationParameter: fromDuration,
+        }));
 
     final Duration? currentDuration = videoPlayerController!.value.duration;
     if (currentDuration == null) {
@@ -1313,7 +1319,16 @@ class BetterPlayerController {
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.pause));
         break;
       case VideoEventType.seek:
-        _postEvent(BetterPlayerEvent(BetterPlayerEventType.seekTo));
+        _postEvent(
+          BetterPlayerEvent(
+            BetterPlayerEventType.seekTo,
+            parameters: <String, dynamic>{
+              if (event.position != null) _durationParameter: event.position,
+              _fromDurationParameter:
+                  videoPlayerController?.value.position ?? Duration.zero,
+            },
+          ),
+        );
         break;
       case VideoEventType.completed:
         final VideoPlayerValue? videoValue = videoPlayerController?.value;
