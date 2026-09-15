@@ -700,11 +700,6 @@ class BetterPlayerTelemetryManager {
       final request = await client.postUrl(targetUri);
       request.headers.contentType = ContentType.json;
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      config.headers?.forEach((key, value) {
-        if (value != null) {
-          request.headers.set(key, value);
-        }
-      });
 
       final jsonBytes = utf8.encode(jsonEncode(batch.toMap()));
       request.contentLength = jsonBytes.length;

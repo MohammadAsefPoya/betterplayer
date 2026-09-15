@@ -14,7 +14,7 @@ class BetterPlayerTelemetryConfiguration {
   /// Path for the batch events upload endpoint.
   final String batchEventsPath;
 
-  /// Optional HTTP headers sent with each telemetry request (e.g. auth tokens).
+  /// Optional HTTP headers sent only with session start requests (e.g. auth tokens).
   final Map<String, dynamic>? headers;
 
   /// Interval between taking buffer samples. Defaults to 5 seconds.
