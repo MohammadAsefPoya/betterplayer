@@ -139,11 +139,11 @@ void main() {
       );
       expect(
         config.startSessionUri.toString(),
-        equals('https://telemetry.example.com/api/v1/client/statistics/sessions/start'),
+        equals('https://telemetry.example.com/api/v1/statistics/sessions/start'),
       );
       expect(
         config.batchEventsUri.toString(),
-        equals('https://telemetry.example.com/api/v1/client/statistics/events/batch'),
+        equals('https://telemetry.example.com/api/v1/statistics/events/batch'),
       );
     });
 
@@ -366,7 +366,7 @@ void main() {
         final body = await utf8.decodeStream(request);
         final json = jsonDecode(body) as Map<String, dynamic>;
 
-        if (request.uri.path == '/api/v1/client/statistics/sessions/start') {
+        if (request.uri.path == '/api/v1/statistics/sessions/start') {
           receivedStartRequests.add(json);
           receivedStartHeaders.add(request.headers);
           request.response
@@ -374,7 +374,7 @@ void main() {
             ..headers.contentType = ContentType.json
             ..write(jsonEncode({'success': true, 'alreadyExists': false}))
             ..close();
-        } else if (request.uri.path == '/api/v1/client/statistics/events/batch') {
+        } else if (request.uri.path == '/api/v1/statistics/events/batch') {
           receivedBatchRequests.add(json);
           receivedBatchHeaders.add(request.headers);
           request.response
