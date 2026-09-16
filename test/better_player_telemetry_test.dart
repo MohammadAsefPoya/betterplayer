@@ -728,7 +728,8 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
-    test('Final telemetry sends one queued batch and one end batch', () async {
+    test('Final telemetry sends a single final batch containing queued events',
+        () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
         controller: mockVideo,
@@ -764,14 +765,12 @@ void main() {
 
       await controller.telemetryManager.dispose(isFinal: true);
 
-      expect(receivedBatchRequests.length, equals(2));
-      expect(receivedBatchRequests.first['isFinal'], isFalse);
-      expect(receivedBatchRequests.last['isFinal'], isTrue);
+      expect(receivedBatchRequests.length, equals(1));
+      expect(receivedBatchRequests.first['isFinal'], isTrue);
       expect(
         receivedBatchRequests.first['playbackEvents'],
         hasLength(3),
       );
-      expect(receivedBatchRequests.last['playbackEvents'], isEmpty);
 
       controller.dispose(forceDispose: true);
     });
@@ -913,6 +912,19 @@ void main() {
       );
       controller.telemetryManager.handleNetworkLog(
         BetterPlayerNetworkLog(
+          id: 'generic-client',
+          url: 'https://cdn.example.com/CLIENT',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 270000,
+          durationMs: 140,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 8000,
+          mediaEndTimeMs: 12000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
           id: 'manifest',
           url: 'https://cdn.example.com/video/master.m3u8',
           phase: BetterPlayerNetworkLogPhase.completed,
@@ -987,6 +999,79 @@ void main() {
       expect(chunkLoads.last['bytes'], equals(260000));
       expect(chunkLoads.last['startS'], equals(4.0));
       expect(chunkLoads.last['endS'], equals(8.0));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Chunk telemetry deduplicates near-identical segment intervals',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'segment-audio',
+          url: 'https://cdn.example.com/video/segment-001-audio.ts',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          trackType: 'audio',
+          bytesLoaded: 135172,
+          durationMs: 136,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 6016,
+          mediaEndTimeMs: 12010,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'segment-video-small',
+          url: 'https://cdn.example.com/video/segment-001-small.ts',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 879652,
+          durationMs: 385,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 6006,
+          mediaEndTimeMs: 12012,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'segment-video-large',
+          url: 'https://cdn.example.com/video/segment-001.ts',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 1754980,
+          durationMs: 360,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 6018,
+          mediaEndTimeMs: 12018,
+        ),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final chunkLoads = allChunkLoads();
+      expect(chunkLoads.length, equals(1));
+      expect(chunkLoads.first['source'], equals('segment-001.ts'));
+      expect(chunkLoads.first['bytes'], equals(1754980));
+      expect(chunkLoads.first['chunkSeq'], equals(0));
 
       controller.dispose(forceDispose: true);
     });

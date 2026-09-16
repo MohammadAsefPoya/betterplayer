@@ -337,14 +337,20 @@ class BetterPlayerTelemetryManager {
         log.phase == BetterPlayerNetworkLogPhase.completed &&
         log.mediaStartTimeMs != null &&
         log.mediaEndTimeMs != null) {
+      final trackType = log.trackType?.toLowerCase();
+      if (trackType == 'audio' || trackType == 'text') return;
+
+      final source = log.segmentFileName;
+      if (source == null) return;
+
       final startS = max(0.0, log.mediaStartTimeMs! / 1000.0);
       final endS = max(startS, log.mediaEndTimeMs! / 1000.0);
-      final chunkSeq = _chunkSeqCounter++;
       final qualitySnapshot = _resolveQualitySnapshot(
         bitrate: log.bitrate,
         width: log.width,
         height: log.height,
       );
+      final level = qualitySnapshot?.level ?? _currentQualityLevel ?? 0;
 
       if (qualitySnapshot != null) {
         _updateQualityLevel(
@@ -354,18 +360,46 @@ class BetterPlayerTelemetryManager {
       }
 
       final chunkMetric = BetterPlayerChunkLoadMetric(
-        chunkSeq: chunkSeq,
-        level: qualitySnapshot?.level ?? _currentQualityLevel ?? 0,
+        chunkSeq: _chunkSeqCounter++,
+        level: level,
         startS: startS,
         endS: endS,
         bytes: max(0, log.bytesLoaded),
         loadMs: max(0, log.durationMs),
-        source: log.fileName,
+        source: source,
         loadedAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(log.timestamp),
       );
 
-      _pendingChunkLoads.add(chunkMetric);
+      _addOrReplaceChunkLoad(chunkMetric);
     }
+  }
+
+  void _addOrReplaceChunkLoad(BetterPlayerChunkLoadMetric chunkMetric) {
+    final duplicateIndex = _pendingChunkLoads.indexWhere((existing) {
+      return existing.level == chunkMetric.level &&
+          (existing.startS - chunkMetric.startS).abs() <= 0.05 &&
+          (existing.endS - chunkMetric.endS).abs() <= 0.05;
+    });
+
+    if (duplicateIndex == -1) {
+      _pendingChunkLoads.add(chunkMetric);
+      return;
+    }
+
+    _chunkSeqCounter--;
+    final existing = _pendingChunkLoads[duplicateIndex];
+    if (chunkMetric.bytes <= existing.bytes) return;
+
+    _pendingChunkLoads[duplicateIndex] = BetterPlayerChunkLoadMetric(
+      chunkSeq: existing.chunkSeq,
+      level: chunkMetric.level,
+      startS: chunkMetric.startS,
+      endS: chunkMetric.endS,
+      bytes: chunkMetric.bytes,
+      loadMs: chunkMetric.loadMs,
+      source: chunkMetric.source,
+      loadedAt: chunkMetric.loadedAt,
+    );
   }
 
   _QualitySnapshot? _resolveQualitySnapshot({
@@ -947,8 +981,8 @@ class BetterPlayerTelemetryManager {
     }
   }
 
-  /// Sends all observations currently queued, then sends one empty final
-  /// batch to mark the session as ended.
+  /// Sends all observations currently queued in a single final batch
+  /// marked with isFinal: true to complete the session.
   Future<void> _sendFinalBatches() async {
     final config = _configuration;
     if (config == null || !config.hasValue || _isSendingBatch) return;
@@ -968,11 +1002,11 @@ class BetterPlayerTelemetryManager {
         _retryBatch = null;
       }
 
-      final queuedBatch = BetterPlayerTelemetryBatch(
+      final finalBatch = BetterPlayerTelemetryBatch(
         sessionId: sessionId,
         batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
         sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
-        isFinal: false,
+        isFinal: true,
         chunkLoads: List<BetterPlayerChunkLoadMetric>.from(_pendingChunkLoads),
         bufferSamples:
             List<BetterPlayerBufferSampleMetric>.from(_pendingBufferSamples),
@@ -987,26 +1021,9 @@ class BetterPlayerTelemetryManager {
       _pendingWatchedRanges.clear();
       _pendingPlaybackEvents.clear();
 
-      if (!queuedBatch.isEmpty) {
-        final success = await _uploadBatchPayload(queuedBatch);
-        if (!success) {
-          _retryBatch = queuedBatch;
-          return;
-        }
-      }
-
-      final endBatch = BetterPlayerTelemetryBatch(
-        sessionId: sessionId,
-        batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
-        sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
-        isFinal: true,
-        chunkLoads: const [],
-        bufferSamples: const [],
-        watchedRanges: const [],
-        playbackEvents: const [],
-      );
-      if (!await _uploadBatchPayload(endBatch)) {
-        _retryBatch = endBatch;
+      final success = await _uploadBatchPayload(finalBatch);
+      if (!success) {
+        _retryBatch = finalBatch;
       }
     } finally {
       _isSendingBatch = false;

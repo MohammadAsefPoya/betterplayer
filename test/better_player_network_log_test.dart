@@ -143,17 +143,74 @@ void main() {
       expect(log.fileName, 'segment-004.m4a');
     });
 
-    test("fileName falls back to last path segment when no segment is found",
-        () {
+    test("fileName does not use generic client endpoint as segment source", () {
       final log = BetterPlayerNetworkLog(
         id: '304',
+        url: 'https://cdn.example.com/CLIENT',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+
+      expect(log.segmentFileName, isNull);
+      expect(log.fileName, 'Unknown');
+
+      final logLower = BetterPlayerNetworkLog(
+        id: '304b',
         url: 'https://cdn.example.com/client',
         phase: BetterPlayerNetworkLogPhase.completed,
         dataType: BetterPlayerNetworkDataType.mediaSegment,
         timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
       );
 
-      expect(log.fileName, 'client');
+      expect(logLower.segmentFileName, isNull);
+      expect(logLower.fileName, 'Unknown');
+    });
+
+    test("fileName uses last path segment only when it is a media segment", () {
+      final log = BetterPlayerNetworkLog(
+        id: '305',
+        url: 'https://cdn.example.com/video/segment-005.ts',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+
+      expect(log.segmentFileName, 'segment-005.ts');
+      expect(log.fileName, 'segment-005.ts');
+    });
+
+    test("fileName strips matrix parameters from segment name", () {
+      final log = BetterPlayerNetworkLog(
+        id: '306',
+        url: 'https://cdn.example.com/video/segment-006.ts;matrix=custom',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+
+      expect(log.segmentFileName, 'segment-006.ts');
+      expect(log.fileName, 'segment-006.ts');
+    });
+
+    test("fileName supports CMAF and fragmented media extensions", () {
+      final logCmfv = BetterPlayerNetworkLog(
+        id: '307',
+        url: 'https://cdn.example.com/video/chunk-007.cmfv',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+      expect(logCmfv.segmentFileName, 'chunk-007.cmfv');
+
+      final logFmp4 = BetterPlayerNetworkLog(
+        id: '308',
+        url: 'https://cdn.example.com/video/segment-008.fmp4',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+      expect(logFmp4.segmentFileName, 'segment-008.fmp4');
     });
   });
 

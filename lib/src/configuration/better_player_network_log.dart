@@ -274,7 +274,12 @@ class BetterPlayerNetworkLog {
 
   /// Returns the file/segment name portion of the URL.
   String get fileName {
-    if (url.isEmpty) return 'Unknown';
+    return segmentFileName ?? 'Unknown';
+  }
+
+  /// Returns a real media segment filename, without path or query parameters.
+  String? get segmentFileName {
+    if (url.isEmpty) return null;
     try {
       final uri = Uri.parse(url);
       final pathSegmentName = _findSegmentName(uri.pathSegments);
@@ -295,12 +300,9 @@ class BetterPlayerNetworkLog {
         return extraSegmentName;
       }
 
-      if (uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty) {
-        return uri.pathSegments.last;
-      }
-      return uri.path;
+      return null;
     } catch (_) {
-      return _segmentNameFromValue(url) ?? url;
+      return _segmentNameFromValue(url);
     }
   }
 
@@ -327,10 +329,11 @@ class BetterPlayerNetworkLog {
       final uri = Uri.tryParse(candidate);
       final pathSegments = uri?.pathSegments ?? const <String>[];
       for (final segment in pathSegments.reversed) {
-        if (_isSegmentFileName(segment)) return segment;
+        final cleanSegment = segment.split(';').first;
+        if (_isSegmentFileName(cleanSegment)) return cleanSegment;
       }
 
-      final sanitized = candidate.split('?').first.split('#').first;
+      final sanitized = candidate.split('?').first.split('#').first.split(';').first;
       final parts = sanitized.split('/');
       for (final part in parts.reversed) {
         if (_isSegmentFileName(part)) return part;
@@ -345,14 +348,52 @@ class BetterPlayerNetworkLog {
     if (trimmed.isEmpty) return false;
 
     final lower = trimmed.toLowerCase();
+
+    // Explicitly reject known non-segment endpoints
+    if (_isGenericEndpointName(lower)) {
+      return false;
+    }
+
     final hasMediaExtension = lower.endsWith('.ts') ||
         lower.endsWith('.m4s') ||
         lower.endsWith('.m4a') ||
         lower.endsWith('.aac') ||
-        lower.endsWith('.mp4');
+        lower.endsWith('.mp4') ||
+        lower.endsWith('.fmp4') ||
+        lower.endsWith('.cmfv') ||
+        lower.endsWith('.cmfa') ||
+        lower.endsWith('.m4v') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.mp3');
     if (hasMediaExtension) return true;
 
-    return lower.contains('segment') || lower.contains('chunk');
+    // Segment identifiers like segment-100 or chunk_02 without file extension
+    if (lower.contains('segment') || lower.contains('chunk')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  static bool _isGenericEndpointName(String value) {
+    const genericEndpoints = <String>{
+      'client',
+      'manifest',
+      'playlist',
+      'master',
+      'index',
+      'history',
+      'profile',
+      'reaction',
+      'preference',
+      'unknown',
+      'api',
+      'stream',
+      'events',
+      'v1',
+      'v2',
+    };
+    return genericEndpoints.contains(value);
   }
 
   /// Formatted bytes string (e.g. "1.2 MB" or "450 KB" or "12 B").
