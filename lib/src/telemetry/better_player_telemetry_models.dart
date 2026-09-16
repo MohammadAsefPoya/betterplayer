@@ -20,7 +20,7 @@ class BetterPlayerTelemetryConfiguration {
   /// Interval between taking buffer samples. Defaults to 5 seconds.
   final Duration bufferSampleInterval;
 
-  /// Interval between sending batches of pending observations. Defaults to 10 seconds.
+  /// Interval between sending batches of pending observations. Defaults to 15 seconds.
   final Duration batchSendInterval;
 
   /// Maximum chunk load items per batch. Defaults to 200.
@@ -50,7 +50,7 @@ class BetterPlayerTelemetryConfiguration {
     this.batchEventsPath = '/api/v1/statistics/events/batch',
     this.headers,
     this.bufferSampleInterval = const Duration(seconds: 5),
-    this.batchSendInterval = const Duration(seconds: 10),
+    this.batchSendInterval = const Duration(seconds: 15),
     this.maxChunkLoadsPerBatch = 200,
     this.maxBufferSamplesPerBatch = 20,
     this.maxWatchedRangesPerBatch = 100,
@@ -61,8 +61,7 @@ class BetterPlayerTelemetryConfiguration {
   });
 
   /// Whether this configuration has a valid baseUrl and is enabled.
-  bool get hasValue =>
-      baseUrl != null && baseUrl!.trim().isNotEmpty && enabled;
+  bool get hasValue => baseUrl != null && baseUrl!.trim().isNotEmpty && enabled;
 
   /// Full URL for the start session endpoint, or null if baseUrl is not configured.
   Uri? get startSessionUri {
@@ -70,8 +69,9 @@ class BetterPlayerTelemetryConfiguration {
     if (base == null || base.isEmpty) return null;
     final cleanBase =
         base.endsWith('/') ? base.substring(0, base.length - 1) : base;
-    final cleanPath =
-        startSessionPath.startsWith('/') ? startSessionPath : '/$startSessionPath';
+    final cleanPath = startSessionPath.startsWith('/')
+        ? startSessionPath
+        : '/$startSessionPath';
     return Uri.parse('$cleanBase$cleanPath');
   }
 
@@ -183,6 +183,9 @@ class BetterPlayerChunkLoadMetric {
   /// Download duration in milliseconds.
   final int loadMs;
 
+  /// Segment filename/source, without path or query parameters.
+  final String source;
+
   /// Completion timestamp (UTC ISO string).
   final String loadedAt;
 
@@ -193,6 +196,7 @@ class BetterPlayerChunkLoadMetric {
     required this.endS,
     required this.bytes,
     required this.loadMs,
+    required this.source,
     required this.loadedAt,
   });
 
@@ -204,6 +208,7 @@ class BetterPlayerChunkLoadMetric {
       'endS': endS,
       'bytes': bytes,
       'loadMs': loadMs,
+      'source': source,
       'loadedAt': loadedAt,
     };
   }

@@ -172,6 +172,15 @@ void main() {
     });
 
     test(
+        'BetterPlayerTelemetryConfiguration defaults batch send interval to 15 seconds',
+        () {
+      const config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'https://telemetry.example.com',
+      );
+      expect(config.batchSendInterval, equals(const Duration(seconds: 15)));
+    });
+
+    test(
         'BetterPlayerTelemetryConfiguration with null or empty baseUrl has hasValue = false and null URIs',
         () {
       const configEmpty = BetterPlayerTelemetryConfiguration();
@@ -288,6 +297,7 @@ void main() {
         endS: 6.0,
         bytes: 480000,
         loadMs: 240,
+        source: 'segment-001.ts',
         loadedAt: '2026-09-10T08:00:01.800Z',
       );
       final map = chunk.toMap();
@@ -297,6 +307,7 @@ void main() {
       expect(map['endS'], equals(6.0));
       expect(map['bytes'], equals(480000));
       expect(map['loadMs'], equals(240));
+      expect(map['source'], equals('segment-001.ts'));
       expect(map['loadedAt'], equals('2026-09-10T08:00:01.800Z'));
     });
 
@@ -314,6 +325,7 @@ void main() {
             endS: 5.0,
             bytes: 100000,
             loadMs: 150,
+            source: 'segment-001.ts',
             loadedAt: '2026-09-10T08:00:01.000Z',
           )
         ],
@@ -586,6 +598,7 @@ void main() {
       expect(chunkLoads.first['startS'], equals(0.0));
       expect(chunkLoads.first['endS'], equals(6.0));
       expect(chunkLoads.first['bytes'], equals(500000));
+      expect(chunkLoads.first['source'], equals('media_1.ts'));
 
       await controller.telemetryManager.dispose(isFinal: true);
       controller.dispose(forceDispose: true);
@@ -673,6 +686,118 @@ void main() {
       expect(receivedStartRequests.last['episodeId'], equals(401));
 
       await controller.telemetryManager.dispose(isFinal: true);
+      controller.dispose(forceDispose: true);
+    });
+
+    test(
+        'Chunk telemetry sends segment filename source and excludes non completed media segments',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'valid-segment',
+          url:
+              'https://cdn.example.com/video/quality/segment-001.m4s?token=abc',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 250000,
+          durationMs: 120,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 0,
+          mediaEndTimeMs: 4000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'manifest',
+          url: 'https://cdn.example.com/video/master.m3u8',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.manifest,
+          bytesLoaded: 1000,
+          durationMs: 40,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 0,
+          mediaEndTimeMs: 4000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'init',
+          url: 'https://cdn.example.com/video/init.m4s',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.initialization,
+          bytesLoaded: 5000,
+          durationMs: 30,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 0,
+          mediaEndTimeMs: 4000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'canceled',
+          url: 'https://cdn.example.com/video/segment-002.m4s',
+          phase: BetterPlayerNetworkLogPhase.canceled,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 100000,
+          durationMs: 80,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 4000,
+          mediaEndTimeMs: 8000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'error',
+          url: 'https://cdn.example.com/video/segment-003.m4s',
+          phase: BetterPlayerNetworkLogPhase.error,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 0,
+          durationMs: 70,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 8000,
+          mediaEndTimeMs: 12000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
+          id: 'untimed',
+          url: 'https://cdn.example.com/video/segment-004.m4s',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 250000,
+          durationMs: 100,
+          timestamp: DateTime.now(),
+        ),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final chunkLoads = allChunkLoads();
+      expect(chunkLoads.length, equals(1));
+      expect(chunkLoads.single['source'], equals('segment-001.m4s'));
+      expect(chunkLoads.single['bytes'], equals(250000));
+      expect(chunkLoads.single['startS'], equals(0.0));
+      expect(chunkLoads.single['endS'], equals(4.0));
+
       controller.dispose(forceDispose: true);
     });
 
@@ -1282,6 +1407,130 @@ void main() {
       expect(watchedRanges.last['fromS'], equals(45.0));
       expect(watchedRanges.last['toS'], equals(50.0));
 
+      controller.dispose(forceDispose: true);
+    });
+
+    test(
+        'Seek fallback uses last watched position and only records jumps greater than 15 seconds',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      for (final seconds in <int>[0, 2, 4, 6, 8, 10]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await mockVideo.seekTo(Duration.zero);
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(
+          BetterPlayerEventType.seekTo,
+          parameters: {'duration': Duration.zero},
+        ),
+      );
+
+      await mockVideo.seekTo(const Duration(seconds: 10));
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(
+          BetterPlayerEventType.seekTo,
+          parameters: {'duration': const Duration(seconds: 10)},
+        ),
+      );
+
+      await mockVideo.seekTo(const Duration(seconds: 20));
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(
+          BetterPlayerEventType.seekTo,
+          parameters: {'duration': const Duration(seconds: 20)},
+        ),
+      );
+
+      await mockVideo.seekTo(const Duration(seconds: 35));
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(
+          BetterPlayerEventType.seekTo,
+          parameters: {'duration': const Duration(seconds: 35)},
+        ),
+      );
+
+      await mockVideo.seekTo(const Duration(seconds: 51));
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(
+          BetterPlayerEventType.seekTo,
+          parameters: {'duration': const Duration(seconds: 51)},
+        ),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final seekEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'SEEK')
+          .toList();
+      expect(seekEvents.length, equals(1));
+      expect(seekEvents.single['positionS'], equals(35.0));
+      expect(seekEvents.single['details']['fromS'], equals(35.0));
+      expect(seekEvents.single['details']['toS'], equals(51.0));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Does not send queued events immediately after session start succeeds',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(seconds: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PAUSE',
+        positionS: 5.0,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      expect(receivedStartRequests.length, equals(1));
+      expect(receivedBatchRequests.length, equals(0));
+
+      await Future.delayed(const Duration(milliseconds: 950));
+
+      expect(receivedBatchRequests.length, equals(1));
+      expect(
+        (receivedBatchRequests.single['playbackEvents'] as List).single['type'],
+        equals('PAUSE'),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
       controller.dispose(forceDispose: true);
     });
 

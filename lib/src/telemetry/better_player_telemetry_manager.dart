@@ -222,8 +222,6 @@ class BetterPlayerTelemetryManager {
         _sessionStartCompleted = true;
         _sessionStartRetryTimer?.cancel();
         _sessionStartRetryDelay = const Duration(seconds: 2);
-        // Trigger immediate send of any observations queued during session start
-        _sendPendingBatches(isFinal: false);
         await response.drain<void>();
       } else {
         final errorBody = await response.transform(utf8.decoder).join();
@@ -332,7 +330,7 @@ class BetterPlayerTelemetryManager {
 
     // Ingest completed media chunk segment
     // Rule: Report real measurements. Do not send invented or incomplete segment loads.
-    if (log.isMediaChunk &&
+    if (log.dataType == BetterPlayerNetworkDataType.mediaSegment &&
         log.phase == BetterPlayerNetworkLogPhase.completed &&
         log.mediaStartTimeMs != null &&
         log.mediaEndTimeMs != null) {
@@ -359,6 +357,7 @@ class BetterPlayerTelemetryManager {
         endS: endS,
         bytes: max(0, log.bytesLoaded),
         loadMs: max(0, log.durationMs),
+        source: log.fileName,
         loadedAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(log.timestamp),
       );
 
@@ -508,11 +507,18 @@ class BetterPlayerTelemetryManager {
   ) {
     if (toDuration == null) return;
 
-    final toPositionS = (toDuration?.inMilliseconds ?? 0) / 1000.0;
-    final fromPositionS =
-        (fromDuration?.inMilliseconds ?? (currentPositionS * 1000).round()) /
-            1000.0;
+    final toPositionS = toDuration.inMilliseconds / 1000.0;
+    final fromPositionS = fromDuration != null
+        ? fromDuration.inMilliseconds / 1000.0
+        : _resolveSeekStartPositionFallback(currentPositionS);
     _handleSeekWithPositions(fromPositionS, toPositionS);
+  }
+
+  double _resolveSeekStartPositionFallback(double currentPositionS) {
+    return _pausedPositionS ??
+        _lastWatchedPositionS ??
+        _activeWatchedRange?.toS ??
+        currentPositionS;
   }
 
   void _handleResumePosition(double positionS) {
