@@ -117,7 +117,8 @@ class BetterPlayerNetworkLog {
 
   /// Factory constructor to parse native map sent via EventChannel.
   factory BetterPlayerNetworkLog.fromMap(Map<String, dynamic> map) {
-    final String phaseStr = (map['phase'] as String?)?.toLowerCase() ?? 'completed';
+    final String phaseStr =
+        (map['phase'] as String?)?.toLowerCase() ?? 'completed';
     final BetterPlayerNetworkLogPhase phase;
     switch (phaseStr) {
       case 'start':
@@ -139,8 +140,10 @@ class BetterPlayerNetworkLog {
     }
 
     final String url = (map['url'] as String?) ?? '';
-    final String dataTypeStr = (map['dataType'] as String?)?.toLowerCase() ?? '';
-    final BetterPlayerNetworkDataType dataType = _inferDataType(dataTypeStr, url);
+    final String dataTypeStr =
+        (map['dataType'] as String?)?.toLowerCase() ?? '';
+    final BetterPlayerNetworkDataType dataType =
+        _inferDataType(dataTypeStr, url);
 
     final rawTimestamp = map['timestamp'];
     final DateTime timestamp;
@@ -180,7 +183,8 @@ class BetterPlayerNetworkLog {
     );
   }
 
-  static BetterPlayerNetworkDataType _inferDataType(String dataTypeStr, String url) {
+  static BetterPlayerNetworkDataType _inferDataType(
+      String dataTypeStr, String url) {
     if (dataTypeStr.contains('manifest') || dataTypeStr.contains('playlist')) {
       return BetterPlayerNetworkDataType.manifest;
     }
@@ -190,7 +194,9 @@ class BetterPlayerNetworkLog {
     if (dataTypeStr.contains('drm') || dataTypeStr.contains('key')) {
       return BetterPlayerNetworkDataType.drmKey;
     }
-    if (dataTypeStr.contains('sub') || dataTypeStr.contains('text') || dataTypeStr.contains('vtt')) {
+    if (dataTypeStr.contains('sub') ||
+        dataTypeStr.contains('text') ||
+        dataTypeStr.contains('vtt')) {
       return BetterPlayerNetworkDataType.subtitles;
     }
     if (dataTypeStr.contains('media')) {
@@ -271,14 +277,82 @@ class BetterPlayerNetworkLog {
     if (url.isEmpty) return 'Unknown';
     try {
       final uri = Uri.parse(url);
-      final segments = uri.pathSegments;
-      if (segments.isNotEmpty && segments.last.isNotEmpty) {
-        return segments.last;
+      final pathSegmentName = _findSegmentName(uri.pathSegments);
+      if (pathSegmentName != null) {
+        return pathSegmentName;
+      }
+
+      final querySegmentName =
+          _findSegmentName(uri.queryParametersAll.values.expand((v) => v));
+      if (querySegmentName != null) {
+        return querySegmentName;
+      }
+
+      final extraSegmentName = _findSegmentName(
+        extra?.values.map((value) => value?.toString()) ?? const <String>[],
+      );
+      if (extraSegmentName != null) {
+        return extraSegmentName;
+      }
+
+      if (uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty) {
+        return uri.pathSegments.last;
       }
       return uri.path;
     } catch (_) {
-      return url;
+      return _segmentNameFromValue(url) ?? url;
     }
+  }
+
+  static String? _findSegmentName(Iterable<String?> values) {
+    for (final value in values) {
+      final segmentName = _segmentNameFromValue(value);
+      if (segmentName != null) return segmentName;
+    }
+    return null;
+  }
+
+  static String? _segmentNameFromValue(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+
+    final candidates = <String>[value.trim()];
+    try {
+      final decoded = Uri.decodeFull(value.trim());
+      if (decoded != value.trim()) {
+        candidates.add(decoded);
+      }
+    } catch (_) {}
+
+    for (final candidate in candidates) {
+      final uri = Uri.tryParse(candidate);
+      final pathSegments = uri?.pathSegments ?? const <String>[];
+      for (final segment in pathSegments.reversed) {
+        if (_isSegmentFileName(segment)) return segment;
+      }
+
+      final sanitized = candidate.split('?').first.split('#').first;
+      final parts = sanitized.split('/');
+      for (final part in parts.reversed) {
+        if (_isSegmentFileName(part)) return part;
+      }
+    }
+
+    return null;
+  }
+
+  static bool _isSegmentFileName(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return false;
+
+    final lower = trimmed.toLowerCase();
+    final hasMediaExtension = lower.endsWith('.ts') ||
+        lower.endsWith('.m4s') ||
+        lower.endsWith('.m4a') ||
+        lower.endsWith('.aac') ||
+        lower.endsWith('.mp4');
+    if (hasMediaExtension) return true;
+
+    return lower.contains('segment') || lower.contains('chunk');
   }
 
   /// Formatted bytes string (e.g. "1.2 MB" or "450 KB" or "12 B").

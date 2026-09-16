@@ -408,12 +408,14 @@ void main() {
     final List<Map<String, dynamic>> receivedBatchRequests = [];
     final List<HttpHeaders> receivedStartHeaders = [];
     final List<HttpHeaders> receivedBatchHeaders = [];
+    final List<int> batchResponseStatusCodes = [];
 
     setUp(() async {
       receivedStartRequests.clear();
       receivedBatchRequests.clear();
       receivedStartHeaders.clear();
       receivedBatchHeaders.clear();
+      batchResponseStatusCodes.clear();
 
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((HttpRequest request) async {
@@ -431,8 +433,11 @@ void main() {
         } else if (request.uri.path == '/api/v1/statistics/events/batch') {
           receivedBatchRequests.add(json);
           receivedBatchHeaders.add(request.headers);
+          final statusCode = batchResponseStatusCodes.isEmpty
+              ? HttpStatus.ok
+              : batchResponseStatusCodes.removeAt(0);
           request.response
-            ..statusCode = HttpStatus.ok
+            ..statusCode = statusCode
             ..headers.contentType = ContentType.json
             ..write(jsonEncode({'success': true, 'duplicate': false}))
             ..close();
@@ -493,14 +498,26 @@ void main() {
       );
     }
 
+    Future<void> progressAtDuration(
+      BetterPlayerMockController controller,
+      MockVideoPlayerController mockVideo,
+      Duration position,
+    ) async {
+      await mockVideo.seekTo(position);
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+    }
+
     Future<void> progressAt(
       BetterPlayerMockController controller,
       MockVideoPlayerController mockVideo,
       int seconds,
     ) async {
-      await mockVideo.seekTo(Duration(seconds: seconds));
-      controller.telemetryManager.handlePlayerEvent(
-        BetterPlayerEvent(BetterPlayerEventType.progress),
+      await progressAtDuration(
+        controller,
+        mockVideo,
+        Duration(seconds: seconds),
       );
     }
 
@@ -601,6 +618,161 @@ void main() {
       expect(chunkLoads.first['source'], equals('media_1.ts'));
 
       await controller.telemetryManager.dispose(isFinal: true);
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Periodic telemetry sends at most one batch per timer tick', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(milliseconds: 200),
+        maxPlaybackEventsPerBatch: 1,
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PLAYBACK_STARTED',
+        positionS: 0.0,
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PAUSE',
+        positionS: 1.0,
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'RESUME',
+        positionS: 2.0,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      expect(receivedBatchRequests.length, equals(1));
+      expect(
+        receivedBatchRequests.first['playbackEvents'],
+        hasLength(1),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 220));
+
+      expect(receivedBatchRequests.length, equals(2));
+      expect(
+        receivedBatchRequests.last['playbackEvents'],
+        hasLength(1),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: false);
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Successful retry does not send another new batch in the same tick',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      batchResponseStatusCodes.add(HttpStatus.internalServerError);
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(milliseconds: 200),
+        maxPlaybackEventsPerBatch: 1,
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PLAYBACK_STARTED',
+        positionS: 0.0,
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PAUSE',
+        positionS: 1.0,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      expect(receivedBatchRequests.length, equals(1));
+      final failedBatchId = receivedBatchRequests.single['batchId'];
+
+      await Future.delayed(const Duration(milliseconds: 220));
+
+      expect(receivedBatchRequests.length, equals(2));
+      expect(receivedBatchRequests.last['batchId'], equals(failedBatchId));
+
+      await Future.delayed(const Duration(milliseconds: 180));
+
+      expect(receivedBatchRequests.length, equals(3));
+      expect(
+          receivedBatchRequests.last['batchId'], isNot(equals(failedBatchId)));
+
+      await controller.telemetryManager.dispose(isFinal: false);
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Final telemetry sends one queued batch and one end batch', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        maxPlaybackEventsPerBatch: 1,
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PLAYBACK_STARTED',
+        positionS: 0.0,
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'PAUSE',
+        positionS: 1.0,
+      );
+      controller.telemetryManager.recordPlaybackEvent(
+        type: 'RESUME',
+        positionS: 2.0,
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      expect(receivedBatchRequests.length, equals(2));
+      expect(receivedBatchRequests.first['isFinal'], isFalse);
+      expect(receivedBatchRequests.last['isFinal'], isTrue);
+      expect(
+        receivedBatchRequests.first['playbackEvents'],
+        hasLength(3),
+      );
+      expect(receivedBatchRequests.last['playbackEvents'], isEmpty);
+
       controller.dispose(forceDispose: true);
     });
 
@@ -727,6 +899,20 @@ void main() {
       );
       controller.telemetryManager.handleNetworkLog(
         BetterPlayerNetworkLog(
+          id: 'valid-client-segment',
+          url:
+              'https://cdn.example.com/client?segment=https://media.example.com/video/segment-002.ts&token=abc',
+          phase: BetterPlayerNetworkLogPhase.completed,
+          dataType: BetterPlayerNetworkDataType.mediaSegment,
+          bytesLoaded: 260000,
+          durationMs: 130,
+          timestamp: DateTime.now(),
+          mediaStartTimeMs: 4000,
+          mediaEndTimeMs: 8000,
+        ),
+      );
+      controller.telemetryManager.handleNetworkLog(
+        BetterPlayerNetworkLog(
           id: 'manifest',
           url: 'https://cdn.example.com/video/master.m3u8',
           phase: BetterPlayerNetworkLogPhase.completed,
@@ -792,11 +978,15 @@ void main() {
       await controller.telemetryManager.dispose(isFinal: true);
 
       final chunkLoads = allChunkLoads();
-      expect(chunkLoads.length, equals(1));
-      expect(chunkLoads.single['source'], equals('segment-001.m4s'));
-      expect(chunkLoads.single['bytes'], equals(250000));
-      expect(chunkLoads.single['startS'], equals(0.0));
-      expect(chunkLoads.single['endS'], equals(4.0));
+      expect(chunkLoads.length, equals(2));
+      expect(chunkLoads.first['source'], equals('segment-001.m4s'));
+      expect(chunkLoads.first['bytes'], equals(250000));
+      expect(chunkLoads.first['startS'], equals(0.0));
+      expect(chunkLoads.first['endS'], equals(4.0));
+      expect(chunkLoads.last['source'], equals('segment-002.ts'));
+      expect(chunkLoads.last['bytes'], equals(260000));
+      expect(chunkLoads.last['startS'], equals(4.0));
+      expect(chunkLoads.last['endS'], equals(8.0));
 
       controller.dispose(forceDispose: true);
     });
@@ -847,6 +1037,253 @@ void main() {
       expect(receivedBatchRequests.isNotEmpty, isTrue);
 
       await controller.telemetryManager.dispose(isFinal: true);
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Progress jumps up to 15 seconds keep one watched range', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      for (final position in <Duration>[
+        Duration.zero,
+        const Duration(milliseconds: 10714),
+        const Duration(milliseconds: 20387),
+        const Duration(milliseconds: 26508),
+        const Duration(milliseconds: 36508),
+        const Duration(milliseconds: 40312),
+      ]) {
+        await progressAtDuration(controller, mockVideo, position);
+      }
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final seekEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'SEEK')
+          .toList();
+      expect(seekEvents, isEmpty);
+
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(1));
+      expect(watchedRanges.single['fromS'], equals(0.0));
+      expect(watchedRanges.single['toS'], equals(40.312));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Progress jump exactly 15 seconds keeps one watched range', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      for (final seconds in <int>[0, 1, 16, 20]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(1));
+      expect(watchedRanges.single['fromS'], equals(0.0));
+      expect(watchedRanges.single['toS'], equals(20.0));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Progress jump greater than 15 seconds splits watched ranges',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      for (final position in <Duration>[
+        Duration.zero,
+        const Duration(seconds: 1),
+        const Duration(milliseconds: 16001),
+        const Duration(seconds: 20),
+      ]) {
+        await progressAtDuration(controller, mockVideo, position);
+      }
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(2));
+      expect(watchedRanges.first['fromS'], equals(0.0));
+      expect(watchedRanges.first['toS'], equals(1.0));
+      expect(watchedRanges.last['fromS'], equals(16.001));
+      expect(watchedRanges.last['toS'], equals(20.0));
+
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Buffering side effect pause and play events are not user events',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 5));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      for (final position in <Duration>[
+        Duration.zero,
+        const Duration(milliseconds: 10714),
+      ]) {
+        await progressAtDuration(controller, mockVideo, position);
+      }
+
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.bufferingStart),
+      );
+      await mockVideo.pause();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.pause),
+      );
+
+      await mockVideo.seekTo(const Duration(milliseconds: 20387));
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.bufferingEnd),
+      );
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      await progressAtDuration(
+        controller,
+        mockVideo,
+        const Duration(milliseconds: 26508),
+      );
+
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.bufferingStart),
+      );
+      await mockVideo.pause();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.pause),
+      );
+
+      await mockVideo.seekTo(const Duration(milliseconds: 36508));
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.bufferingEnd),
+      );
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+
+      await progressAtDuration(
+        controller,
+        mockVideo,
+        const Duration(milliseconds: 40312),
+      );
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final playbackEvents = allPlaybackEvents();
+      expect(
+        playbackEvents.where((event) => event['type'] == 'STALL_START').length,
+        equals(2),
+      );
+      expect(
+        playbackEvents.where((event) => event['type'] == 'STALL_END').length,
+        equals(2),
+      );
+      expect(
+          playbackEvents.where((event) => event['type'] == 'PAUSE'), isEmpty);
+      expect(
+        playbackEvents.where((event) => event['type'] == 'RESUME'),
+        isEmpty,
+      );
+      expect(playbackEvents.where((event) => event['type'] == 'SEEK'), isEmpty);
+
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(1));
+      expect(watchedRanges.single['fromS'], equals(0.0));
+      expect(watchedRanges.single['toS'], equals(40.312));
+
       controller.dispose(forceDispose: true);
     });
 

@@ -57,6 +57,8 @@ class BetterPlayerTelemetryManager {
   double? _lastPlaybackEventPositionS;
   Map<String, dynamic>? _lastPlaybackEventDetails;
   DateTime? _lastPlaybackEventAt;
+  double? _suppressNextPausePositionS;
+  double? _suppressNextPlayPositionS;
 
   // Queues for pending observations
   final List<BetterPlayerChunkLoadMetric> _pendingChunkLoads = [];
@@ -99,8 +101,7 @@ class BetterPlayerTelemetryManager {
         (_sessionStartCompleted || _hasPendingData)) {
       try {
         _finalizeWatchedRange(_getCurrentPositionSeconds());
-        await _sendPendingBatches(isFinal: true)
-            .timeout(const Duration(seconds: 2));
+        await _sendFinalBatches().timeout(const Duration(seconds: 2));
       } catch (_) {}
     }
 
@@ -123,6 +124,8 @@ class BetterPlayerTelemetryManager {
     _lastPlaybackEventPositionS = null;
     _lastPlaybackEventDetails = null;
     _lastPlaybackEventAt = null;
+    _suppressNextPausePositionS = null;
+    _suppressNextPlayPositionS = null;
     _retryBatch = null;
     _pendingChunkLoads.clear();
     _pendingBufferSamples.clear();
@@ -442,6 +445,13 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handlePlay(double positionS) {
+    if (_consumeSuppressedPlay(positionS)) {
+      _playbackState = _TelemetryPlaybackState.playing;
+      _pausedPositionS = null;
+      _startOrExtendWatchedRange(positionS);
+      return;
+    }
+
     final pausedPositionS = _pausedPositionS;
     final wasPaused = _playbackState == _TelemetryPlaybackState.paused;
     if (_hasPlaybackStarted && wasPaused) {
@@ -462,6 +472,14 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handlePause(double positionS) {
+    if (_consumeSuppressedPause(positionS)) {
+      if (_activeWatchedRange != null) {
+        _activeWatchedRange = _activeWatchedRange!.copyWith(toS: positionS);
+        _lastWatchedPositionS = positionS;
+      }
+      return;
+    }
+
     _pausedPositionS = positionS;
     if (_activeWatchedRange != null) {
       _activeWatchedRange = _activeWatchedRange!.copyWith(toS: positionS);
@@ -543,7 +561,11 @@ class BetterPlayerTelemetryManager {
   void _handleStallStart(double positionS) {
     // Only record stall if video playback genuinely started and was playing
     if (_hasPlaybackStarted && _isControllerPlaying) {
-      _finalizeWatchedRange(positionS);
+      if (_activeWatchedRange != null) {
+        _activeWatchedRange = _activeWatchedRange!.copyWith(toS: positionS);
+        _lastWatchedPositionS = positionS;
+      }
+      _suppressNextPausePositionS = positionS;
       recordPlaybackEvent(
         type: 'STALL_START',
         positionS: positionS,
@@ -553,6 +575,7 @@ class BetterPlayerTelemetryManager {
 
   void _handleStallEnd(double positionS) {
     if (_hasPlaybackStarted) {
+      _suppressNextPlayPositionS = positionS;
       recordPlaybackEvent(
         type: 'STALL_END',
         positionS: positionS,
@@ -562,6 +585,45 @@ class BetterPlayerTelemetryManager {
         _startOrExtendWatchedRange(positionS);
       }
     }
+  }
+
+  bool _consumeSuppressedPause(double positionS) {
+    return _consumeSuppressedPlaybackTransition(
+      positionS,
+      pause: true,
+    );
+  }
+
+  bool _consumeSuppressedPlay(double positionS) {
+    return _consumeSuppressedPlaybackTransition(
+      positionS,
+      pause: false,
+    );
+  }
+
+  bool _consumeSuppressedPlaybackTransition(
+    double positionS, {
+    required bool pause,
+  }) {
+    final suppressedPositionS =
+        pause ? _suppressNextPausePositionS : _suppressNextPlayPositionS;
+    if (suppressedPositionS == null) return false;
+
+    if ((positionS - suppressedPositionS).abs() > 0.25) {
+      if (pause) {
+        _suppressNextPausePositionS = null;
+      } else {
+        _suppressNextPlayPositionS = null;
+      }
+      return false;
+    }
+
+    if (pause) {
+      _suppressNextPausePositionS = null;
+    } else {
+      _suppressNextPlayPositionS = null;
+    }
+    return true;
   }
 
   void _handleQualitySwitch(double positionS, BetterPlayerEvent event) {
@@ -629,7 +691,7 @@ class BetterPlayerTelemetryManager {
       positionS: positionS,
     );
     // Send final observations
-    _sendPendingBatches(isFinal: true);
+    _sendFinalBatches();
   }
 
   void _handleError(double positionS, dynamic error) {
@@ -675,8 +737,8 @@ class BetterPlayerTelemetryManager {
     final lastPos = _lastWatchedPositionS ?? _activeWatchedRange!.fromS;
     final delta = positionS - lastPos;
 
-    // Normal forward playback progression (e.g. 0.0s to 2.5s)
-    if (delta >= 0.0 && delta <= 2.5) {
+    // Forward playback progression or a small tolerated seek/jump.
+    if (delta >= 0.0 && delta <= _seekDiscontinuityThresholdS) {
       _activeWatchedRange = _activeWatchedRange!.copyWith(toS: positionS);
       _lastWatchedPositionS = positionS;
     } else {
@@ -832,9 +894,9 @@ class BetterPlayerTelemetryManager {
         final success = await _uploadBatchPayload(_retryBatch!);
         if (success) {
           _retryBatch = null;
+          return;
         } else {
           // Keep retryBatch and do not send newer batches yet
-          _isSendingBatch = false;
           return;
         }
       }
@@ -850,44 +912,101 @@ class BetterPlayerTelemetryManager {
         }
       }
 
-      // 3. Partition queues respecting batch limits
-      while (_hasPendingData || (isFinal && _pendingPlaybackEvents.isEmpty)) {
-        final chunkBatch =
-            _takeSublist(_pendingChunkLoads, config.maxChunkLoadsPerBatch);
-        final bufferBatch = _takeSublist(
-            _pendingBufferSamples, config.maxBufferSamplesPerBatch);
-        final watchedBatch = _takeSublist(
-            _pendingWatchedRanges, config.maxWatchedRangesPerBatch);
-        final eventsBatch = _takeSublist(
-            _pendingPlaybackEvents, config.maxPlaybackEventsPerBatch);
+      // 3. Build at most one batch per send call, respecting batch limits.
+      final chunkBatch =
+          _takeSublist(_pendingChunkLoads, config.maxChunkLoadsPerBatch);
+      final bufferBatch =
+          _takeSublist(_pendingBufferSamples, config.maxBufferSamplesPerBatch);
+      final watchedBatch =
+          _takeSublist(_pendingWatchedRanges, config.maxWatchedRangesPerBatch);
+      final eventsBatch = _takeSublist(
+          _pendingPlaybackEvents, config.maxPlaybackEventsPerBatch);
 
-        final bool thisBatchIsFinal = isFinal && !_hasPendingData;
+      final batch = BetterPlayerTelemetryBatch(
+        sessionId: sessionId,
+        batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
+        sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
+        isFinal: isFinal,
+        chunkLoads: chunkBatch,
+        bufferSamples: bufferBatch,
+        watchedRanges: watchedBatch,
+        playbackEvents: eventsBatch,
+      );
 
-        final batch = BetterPlayerTelemetryBatch(
-          sessionId: sessionId,
-          batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
-          sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
-          isFinal: thisBatchIsFinal,
-          chunkLoads: chunkBatch,
-          bufferSamples: bufferBatch,
-          watchedRanges: watchedBatch,
-          playbackEvents: eventsBatch,
-        );
+      if (batch.isEmpty && !isFinal) {
+        return;
+      }
 
-        if (batch.isEmpty && !thisBatchIsFinal) {
-          break;
-        }
+      final success = await _uploadBatchPayload(batch);
+      if (!success) {
+        // Save batch for safe retry with identical batchId & payload
+        _retryBatch = batch;
+      }
+    } finally {
+      _isSendingBatch = false;
+    }
+  }
 
-        final success = await _uploadBatchPayload(batch);
+  /// Sends all observations currently queued, then sends one empty final
+  /// batch to mark the session as ended.
+  Future<void> _sendFinalBatches() async {
+    final config = _configuration;
+    if (config == null || !config.hasValue || _isSendingBatch) return;
+
+    if (!_sessionStartCompleted) {
+      if (!_sessionStartInitiated) {
+        _dispatchSessionStart();
+      }
+      return;
+    }
+
+    _isSendingBatch = true;
+    try {
+      if (_retryBatch != null) {
+        final success = await _uploadBatchPayload(_retryBatch!);
+        if (!success) return;
+        _retryBatch = null;
+      }
+
+      final queuedBatch = BetterPlayerTelemetryBatch(
+        sessionId: sessionId,
+        batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
+        sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
+        isFinal: false,
+        chunkLoads: List<BetterPlayerChunkLoadMetric>.from(_pendingChunkLoads),
+        bufferSamples:
+            List<BetterPlayerBufferSampleMetric>.from(_pendingBufferSamples),
+        watchedRanges:
+            List<BetterPlayerWatchedRangeMetric>.from(_pendingWatchedRanges),
+        playbackEvents:
+            List<BetterPlayerPlaybackEventMetric>.from(_pendingPlaybackEvents),
+      );
+
+      _pendingChunkLoads.clear();
+      _pendingBufferSamples.clear();
+      _pendingWatchedRanges.clear();
+      _pendingPlaybackEvents.clear();
+
+      if (!queuedBatch.isEmpty) {
+        final success = await _uploadBatchPayload(queuedBatch);
         if (!success) {
-          // Save batch for safe retry with identical batchId & payload
-          _retryBatch = batch;
-          break;
+          _retryBatch = queuedBatch;
+          return;
         }
+      }
 
-        if (thisBatchIsFinal) {
-          break;
-        }
+      final endBatch = BetterPlayerTelemetryBatch(
+        sessionId: sessionId,
+        batchId: BetterPlayerTelemetryUtils.generateUuidV4(),
+        sentAt: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
+        isFinal: true,
+        chunkLoads: const [],
+        bufferSamples: const [],
+        watchedRanges: const [],
+        playbackEvents: const [],
+      );
+      if (!await _uploadBatchPayload(endBatch)) {
+        _retryBatch = endBatch;
       }
     } finally {
       _isSendingBatch = false;
@@ -975,7 +1094,9 @@ class BetterPlayerTelemetryManager {
         (_sessionStartCompleted || _hasPendingData)) {
       // Best effort final upload
       try {
-        await _sendPendingBatches(isFinal: isFinal)
+        await (isFinal
+                ? _sendFinalBatches()
+                : _sendPendingBatches(isFinal: false))
             .timeout(const Duration(seconds: 3));
       } catch (_) {}
     }

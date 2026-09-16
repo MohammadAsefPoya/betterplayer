@@ -1516,6 +1516,9 @@ class BetterPlayerController {
       return;
     }
     if (!_disposed) {
+      // Start the final telemetry flush while the video controller still has
+      // its last position available.
+      _telemetryManager.dispose(isFinal: true);
       if (videoPlayerController != null) {
         pause();
         videoPlayerController!.removeListener(_onFullScreenStateChanged);
@@ -1529,7 +1532,6 @@ class BetterPlayerController {
       _controlsVisibilityStreamController.close();
       _networkLogStreamController.close();
       _videoEventStreamSubscription?.cancel();
-      _telemetryManager.dispose(isFinal: true);
       _disposed = true;
       _controllerEventStreamController.close();
 

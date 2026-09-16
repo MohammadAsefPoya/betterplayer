@@ -101,6 +101,60 @@ void main() {
       expect(recreated.durationMs, original.durationMs);
       expect(recreated.statusCode, original.statusCode);
     });
+
+    test("fileName extracts segment basename from query parameter", () {
+      final log = BetterPlayerNetworkLog(
+        id: '301',
+        url:
+            'https://cdn.example.com/client?segment=https://media.example.com/video/segment-002.ts&token=abc',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+
+      expect(log.fileName, 'segment-002.ts');
+    });
+
+    test("fileName extracts segment basename from encoded query URL", () {
+      final log = BetterPlayerNetworkLog(
+        id: '302',
+        url:
+            'https://cdn.example.com/client?url=https%3A%2F%2Fmedia.example.com%2Fv%2Fchunk-003.m4s%3Ftoken%3Dsecret',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+
+      expect(log.fileName, 'chunk-003.m4s');
+    });
+
+    test("fileName extracts segment basename from extra metadata", () {
+      final log = BetterPlayerNetworkLog(
+        id: '303',
+        url: 'https://cdn.example.com/client',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+        extra: const <String, dynamic>{
+          'segmentUrl': 'https://media.example.com/video/segment-004.m4a',
+        },
+      );
+
+      expect(log.fileName, 'segment-004.m4a');
+    });
+
+    test("fileName falls back to last path segment when no segment is found",
+        () {
+      final log = BetterPlayerNetworkLog(
+        id: '304',
+        url: 'https://cdn.example.com/client',
+        phase: BetterPlayerNetworkLogPhase.completed,
+        dataType: BetterPlayerNetworkDataType.mediaSegment,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(1690000000000),
+      );
+
+      expect(log.fileName, 'client');
+    });
   });
 
   group("BetterPlayerController Network Log Stream & Listener Tests", () {
@@ -173,7 +227,8 @@ void main() {
   });
 
   group("BetterPlayerNetworkLogsViewer Widget Tests", () {
-    testWidgets("Renders empty state when no logs", (WidgetTester tester) async {
+    testWidgets("Renders empty state when no logs",
+        (WidgetTester tester) async {
       final StreamController<BetterPlayerNetworkLog> testStreamController =
           StreamController<BetterPlayerNetworkLog>.broadcast();
 
@@ -188,7 +243,8 @@ void main() {
       );
 
       expect(find.text('Network Logs'), findsOneWidget);
-      expect(find.textContaining('No network requests captured yet'), findsOneWidget);
+      expect(find.textContaining('No network requests captured yet'),
+          findsOneWidget);
 
       await testStreamController.close();
     });
