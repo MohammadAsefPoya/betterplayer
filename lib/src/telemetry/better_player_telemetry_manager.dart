@@ -695,11 +695,18 @@ class BetterPlayerTelemetryManager {
       return;
     }
 
-    _finalizeWatchedRange(positionS);
     _currentQualityLevel = snapshot.level;
     _currentQualityBitrate = snapshot.bitrate;
     _currentQualityWidth = snapshot.width;
     _currentQualityHeight = snapshot.height;
+
+    if (_activeWatchedRange != null) {
+      _activeWatchedRange = _activeWatchedRange!.copyWith(
+        level: snapshot.level,
+      );
+    } else if (_isControllerPlaying) {
+      _startOrExtendWatchedRange(positionS);
+    }
 
     recordPlaybackEvent(
       type: 'QUALITY_SWITCH',
@@ -712,10 +719,6 @@ class BetterPlayerTelemetryManager {
         if (snapshot.height != null) 'height': snapshot.height,
       },
     );
-
-    if (_isControllerPlaying) {
-      _startOrExtendWatchedRange(positionS);
-    }
   }
 
   void _handleEnded(double positionS) {

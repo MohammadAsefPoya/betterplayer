@@ -1801,6 +1801,97 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
+    test(
+        'Quality switches during continuous playback do not split watched ranges',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      mockVideo.setDuration(const Duration(minutes: 10));
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+      final track1080 = BetterPlayerAsmsTrack(
+          '1080p', 1920, 1080, 5000000, 0, '', 'video/mp4');
+      final track720 = BetterPlayerAsmsTrack(
+          '720p', 1280, 720, 2500000, 0, '', 'video/mp4');
+      controller.betterPlayerAsmsTracks.addAll(<BetterPlayerAsmsTrack>[
+        BetterPlayerAsmsTrack.defaultTrack(),
+        track1080,
+        track720,
+      ]);
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(hours: 1),
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 101),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      await mockVideo.play();
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.play),
+      );
+      controller.telemetryManager.handlePlayerEvent(
+        BetterPlayerEvent(BetterPlayerEventType.progress),
+      );
+
+      // Play continuous from 0 to 10 at level 1 (1080p)
+      controller.telemetryManager.handleNetworkLog(
+        completedMediaChunkLog(
+          id: 'chunk-1080',
+          bitrate: 5000000,
+          width: 1920,
+          height: 1080,
+          mediaStartTimeMs: 0,
+          mediaEndTimeMs: 10000,
+        ),
+      );
+
+      for (final seconds in <int>[2, 4, 6, 8, 10]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      // Quality switch at position 10 to level 2 (720p)
+      controller.telemetryManager.handleNetworkLog(
+        completedMediaChunkLog(
+          id: 'chunk-720',
+          bitrate: 2500000,
+          width: 1280,
+          height: 720,
+          mediaStartTimeMs: 10000,
+          mediaEndTimeMs: 20000,
+        ),
+      );
+
+      // Continue continuous playback from 10 to 20
+      for (final seconds in <int>[12, 14, 16, 18, 20]) {
+        await progressAt(controller, mockVideo, seconds);
+      }
+
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      // Verify QUALITY_SWITCH event was recorded
+      final qualityEvents = allPlaybackEvents()
+          .where((event) => event['type'] == 'QUALITY_SWITCH')
+          .toList();
+      expect(qualityEvents.length, greaterThanOrEqualTo(1));
+
+      // Verify watched ranges: continuous playback results in exactly 1 watched range
+      final watchedRanges = allWatchedRanges();
+      expect(watchedRanges.length, equals(1));
+      expect(watchedRanges.single['fromS'], equals(0.0));
+      expect(watchedRanges.single['toS'], equals(20.0));
+      expect(watchedRanges.single['level'], equals(2));
+
+      controller.dispose(forceDispose: true);
+    });
+
     test('Resume more than 15 seconds from pause position counts as seek',
         () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
