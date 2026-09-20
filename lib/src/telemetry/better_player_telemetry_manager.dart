@@ -179,7 +179,7 @@ class BetterPlayerTelemetryManager {
     );
   }
 
-  /// Dispatches POST /api/v1/statistics/sessions/start
+  /// Dispatches POST v1/statistics/sessions/start
   Future<void> _dispatchSessionStart() async {
     final config = _configuration;
     final data = _telemetryData;

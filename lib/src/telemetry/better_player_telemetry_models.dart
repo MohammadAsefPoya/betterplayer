@@ -46,8 +46,8 @@ class BetterPlayerTelemetryConfiguration {
 
   const BetterPlayerTelemetryConfiguration({
     this.baseUrl,
-    this.startSessionPath = '/api/v1/statistics/sessions/start',
-    this.batchEventsPath = '/api/v1/statistics/events/batch',
+    this.startSessionPath = 'v1/statistics/sessions/start',
+    this.batchEventsPath = 'v1/statistics/events/batch',
     this.headers,
     this.bufferSampleInterval = const Duration(seconds: 5),
     this.batchSendInterval = const Duration(seconds: 15),
