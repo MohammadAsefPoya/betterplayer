@@ -5,6 +5,7 @@
 * Fixed Android network-loss playback recovery by retrying recoverable connectivity errors, restoring playback when the connection returns, and clearing stale error state after successful recovery.
 * Fixed Android manual quality selection so user-picked quality is now locked to the exact video track and re-applied after reconnect and live-edge recovery instead of behaving like auto selection.
 * Fixed Android connection-loss reporting so long buffering stalls now surface an exception event instead of silently hanging forever in buffering state.
+* Fixed playback position reset where temporary network drops or buffering stalls caused movies to unexpectedly restart from the beginning (0:00).
 
 ## 0.0.84
 * [BREAKING_CHANGE] Updated min. Flutter version to 3.3.0 and min. Dart version to 3.0.0.

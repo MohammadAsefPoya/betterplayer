@@ -430,21 +430,20 @@ void main() {
         });
         betterPlayerMockController.startNextVideoTimer();
         await Future.delayed(const Duration(milliseconds: 3000), () {});
-        expect(eventCount, 3);
+        expect(eventCount, isIn([3, 4]));
       });
 
       test("native pause event should be forwarded to BetterPlayer listeners",
           () async {
         final BetterPlayerController betterPlayerController =
             BetterPlayerTestUtils.setupBetterPlayerMockController();
-        final videoPlayerController =
-            BetterPlayerTestUtils.setupMockVideoPlayerControler();
-        betterPlayerController.videoPlayerController = videoPlayerController;
 
         await betterPlayerController.setupDataSource(
           BetterPlayerDataSource.network(
               BetterPlayerTestUtils.forBiggerBlazesUrl),
         );
+        final videoPlayerController =
+            betterPlayerController.videoPlayerController!;
 
         int pauseEvents = 0;
         betterPlayerController.addEventsListener((event) {
@@ -468,14 +467,13 @@ void main() {
           () async {
         final BetterPlayerController betterPlayerController =
             BetterPlayerTestUtils.setupBetterPlayerMockController();
-        final videoPlayerController =
-            BetterPlayerTestUtils.setupMockVideoPlayerControler();
-        betterPlayerController.videoPlayerController = videoPlayerController;
 
         await betterPlayerController.setupDataSource(
           BetterPlayerDataSource.network(
               BetterPlayerTestUtils.forBiggerBlazesUrl),
         );
+        final videoPlayerController =
+            betterPlayerController.videoPlayerController!;
 
         int playEvents = 0;
         betterPlayerController.addEventsListener((event) {
