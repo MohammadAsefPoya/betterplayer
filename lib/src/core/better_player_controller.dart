@@ -1254,9 +1254,20 @@ class BetterPlayerController {
   void _handleVideoEvent(VideoEvent event) async {
     switch (event.eventType) {
       case VideoEventType.play:
+        _videoPlayerValueOnError = null;
+        if (videoPlayerController != null &&
+            videoPlayerController!.value.isPlaying != true) {
+          videoPlayerController!.value =
+              videoPlayerController!.value.copyWith(isPlaying: true);
+        }
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.play));
         break;
       case VideoEventType.pause:
+        if (videoPlayerController != null &&
+            videoPlayerController!.value.isPlaying != false) {
+          videoPlayerController!.value =
+              videoPlayerController!.value.copyWith(isPlaying: false);
+        }
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.pause));
         break;
       case VideoEventType.seek:
@@ -1284,6 +1295,7 @@ class BetterPlayerController {
             }));
         break;
       case VideoEventType.bufferingEnd:
+        _videoPlayerValueOnError = null;
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.bufferingEnd));
         _retryAsmsDataSourceIfNeeded();
         break;

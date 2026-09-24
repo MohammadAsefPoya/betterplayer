@@ -659,6 +659,7 @@ internal class BetterPlayer(
         setAudioAttributes(exoPlayer, true)
         playbackEventListener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                updateLastKnownPlaybackPosition()
                 sendPlayPauseEventIfNeeded(isPlaying)
             }
         }
@@ -676,6 +677,7 @@ internal class BetterPlayer(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
+                        updateLastKnownPlaybackPosition()
                         startBufferingTimeoutWatchdog()
                         sendBufferingUpdate(true)
                         val event: MutableMap<String, Any> = HashMap()
@@ -683,6 +685,7 @@ internal class BetterPlayer(
                         eventSink.success(event)
                     }
                     Player.STATE_READY -> {
+                        updateLastKnownPlaybackPosition()
                         behindLiveWindowRecoveryAttempts = 0
                         pendingRecoverableNetworkError = false
                         hasSentBufferingStallError = false
@@ -714,9 +717,12 @@ internal class BetterPlayer(
                     return
                 }
                 if (shouldRecoverFromConnectivityLoss(error)) {
-                    lastKnownPlaybackPositionMs = exoPlayer?.currentPosition ?: 0L
+                    val currentPos = exoPlayer?.currentPosition ?: 0L
+                    if (currentPos > 0L && (!pendingRecoverableNetworkError || lastKnownPlaybackPositionMs <= 0L)) {
+                        lastKnownPlaybackPositionMs = currentPos
+                    }
                     shouldResumeAfterRecoverableError =
-                        exoPlayer?.playWhenReady == true || lastKnownIsPlaying == true
+                        exoPlayer?.playWhenReady == true || lastKnownIsPlaying == true || shouldResumeAfterRecoverableError
                     pendingRecoverableNetworkError = true
                     hasSentBufferingStallError = true
                     startRecoverableErrorRecoveryLoop()
@@ -730,6 +736,7 @@ internal class BetterPlayer(
     }
 
     fun sendBufferingUpdate(isFromBufferingStart: Boolean) {
+        updateLastKnownPlaybackPosition()
         val bufferedPosition = exoPlayer?.bufferedPosition ?: 0L
         if (isFromBufferingStart || bufferedPosition != lastSendBufferedPosition) {
             val event: MutableMap<String, Any> = HashMap()
@@ -820,7 +827,17 @@ internal class BetterPlayer(
     }
 
     val position: Long
-        get() = exoPlayer?.currentPosition ?: 0L
+        get() {
+            updateLastKnownPlaybackPosition()
+            return exoPlayer?.currentPosition ?: 0L
+        }
+
+    private fun updateLastKnownPlaybackPosition() {
+        val pos = exoPlayer?.currentPosition ?: 0L
+        if (pos > 0L) {
+            lastKnownPlaybackPositionMs = pos
+        }
+    }
 
     val absolutePosition: Long
         get() {
@@ -945,10 +962,12 @@ internal class BetterPlayer(
             }
 
             val playbackPosition = player.currentPosition
-            lastKnownPlaybackPositionMs = playbackPosition
+            if (playbackPosition > 0L) {
+                lastKnownPlaybackPositionMs = playbackPosition
+            }
             pendingRecoverableNetworkError = true
             shouldResumeAfterRecoverableError =
-                player.playWhenReady || lastKnownIsPlaying == true
+                player.playWhenReady || lastKnownIsPlaying == true || shouldResumeAfterRecoverableError
             startRecoverableErrorRecoveryLoop()
 
             if (!hasSentBufferingStallError) {
@@ -990,7 +1009,7 @@ internal class BetterPlayer(
         val resumePlayback = forceResume ?: shouldResumeAfterRecoverableError
         val targetPosition = positionMs ?: lastKnownPlaybackPositionMs
 
-        Log.w(TAG, "Attempting to recover from connectivity loss")
+        Log.w(TAG, "Attempting to recover from connectivity loss, targetPosition=$targetPosition")
         pendingRecoverableNetworkError = true
         player.setMediaSource(mediaSource, false)
         player.prepare()
