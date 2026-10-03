@@ -7,6 +7,13 @@ class BetterPlayerSubtitle {
   final Duration? end;
   final List<String>? texts;
 
+  BetterPlayerSubtitle shiftedBy(Duration offset) => BetterPlayerSubtitle._(
+        index: index,
+        start: start == null ? null : start! + offset,
+        end: end == null ? null : end! + offset,
+        texts: texts,
+      );
+
   BetterPlayerSubtitle._({
     this.index,
     this.start,

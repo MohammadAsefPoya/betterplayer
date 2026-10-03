@@ -277,13 +277,28 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
   }
 
   @override
-  Future<void> setAudioTrack(int? textureId, String? name, int? index) {
+  Future<List<Map<String, dynamic>>?> getAudioTracks(int? textureId) async {
+    try {
+      final tracks = await _channel.invokeListMethod<Map<dynamic, dynamic>>(
+          'getAudioTracks', <String, dynamic>{'textureId': textureId});
+      return tracks?.map((track) => Map<String, dynamic>.from(track)).toList();
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> setAudioTrack(int? textureId, String? name, int? index,
+      {String? nativeTrackId, String? formatId, String? language}) {
     return _channel.invokeMethod<void>(
       'setAudioTrack',
       <String, dynamic>{
         'textureId': textureId,
         'name': name,
         'index': index,
+        'nativeTrackId': nativeTrackId,
+        'formatId': formatId,
+        'language': language,
       },
     );
   }

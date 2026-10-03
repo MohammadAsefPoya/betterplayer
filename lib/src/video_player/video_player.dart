@@ -191,10 +191,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   Timer? _timer;
   bool _isDisposed = false;
   late Completer<void> _initializingCompleter;
+  Future<void>? _initialPlayPauseFuture;
   StreamSubscription<dynamic>? _eventSubscription;
 
   bool get _created => _creatingCompleter.isCompleted;
   Duration? _seekPosition;
+  Future<void> _lastSeek = Future<void>.value();
+  int _positionGeneration = 0;
 
   /// This is just exposed for testing. It shouldn't be used by anyone depending
   /// on the plugin.
@@ -224,7 +227,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
             errorDescription: null,
           );
           _initializingCompleter.complete(null);
-          _applyPlayPause();
+          _initialPlayPauseFuture = _applyPlayPause();
           break;
         case VideoEventType.completed:
           value = value.copyWith(isPlaying: false, position: value.duration);
@@ -404,6 +407,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       return;
     }
 
+    _timer?.cancel();
+    _seekPosition = null;
+    _positionGeneration++;
+
     value = VideoPlayerValue(
       duration: null,
       isLooping: value.isLooping,
@@ -413,10 +420,12 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     if (!_creatingCompleter.isCompleted) await _creatingCompleter.future;
 
     _initializingCompleter = Completer<void>();
+    _initialPlayPauseFuture = null;
 
     await VideoPlayerPlatform.instance
         .setDataSource(_textureId, dataSourceDescription);
-    return _initializingCompleter.future;
+    await _initializingCompleter.future;
+    await _initialPlayPauseFuture;
   }
 
   @override
@@ -496,16 +505,17 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         if (_isDisposed) {
           return;
         }
+        final generation = _positionGeneration;
         final Duration? newPosition = await position;
         final DateTime? newAbsolutePosition = await absolutePosition;
-        if (_isDisposed) {
+        if (_isDisposed || generation != _positionGeneration) {
           return;
         }
         _updatePosition(newPosition, absolutePosition: newAbsolutePosition);
         if (_seekPosition != null && newPosition != null) {
           final difference =
               newPosition.inMilliseconds - _seekPosition!.inMilliseconds;
-          if (difference > 0) {
+          if (difference >= 0) {
             _seekPosition = null;
           }
         }
@@ -549,34 +559,55 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   ///
   /// If [moment] is outside of the video's full range it will be automatically
   /// and silently clamped.
-  Future<void> seekTo(Duration? position) async {
+  Future<void> seekTo(Duration? position) {
+    if (_isDisposed) {
+      return Future<void>.value();
+    }
+    if (position == null) {
+      return Future<void>.error(ArgumentError.notNull('position'));
+    }
+    final seek = _lastSeek.then((_) => _performSeek(position));
+    _lastSeek = seek.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return seek;
+  }
+
+  Future<void> _performSeek(Duration position) async {
     _timer?.cancel();
     bool isPlaying = value.isPlaying;
     final int positionInMs = value.position.inMilliseconds;
     final int durationInMs = value.duration?.inMilliseconds ?? 0;
 
-    if (positionInMs >= durationInMs && position?.inMilliseconds == 0) {
+    if (positionInMs >= durationInMs && position.inMilliseconds == 0) {
       isPlaying = true;
     }
     if (_isDisposed) {
       return;
     }
 
-    Duration? positionToSeek = position;
-    if (position! > value.duration!) {
-      positionToSeek = value.duration;
+    Duration positionToSeek = position;
+    if (position > value.duration!) {
+      positionToSeek = value.duration!;
     } else if (position < const Duration()) {
       positionToSeek = const Duration();
     }
     _seekPosition = positionToSeek;
+    _positionGeneration++;
 
-    await _videoPlayerPlatform.seekTo(_textureId, positionToSeek);
-    _updatePosition(position);
+    try {
+      await _videoPlayerPlatform.seekTo(_textureId, positionToSeek);
+    } catch (_) {
+      _seekPosition = null;
+      if (value.isPlaying) {
+        _startPositionUpdateTimer();
+      }
+      rethrow;
+    }
+    _updatePosition(positionToSeek);
 
     if (isPlaying) {
-      play();
+      await play();
     } else {
-      pause();
+      await pause();
     }
   }
 
@@ -641,8 +672,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     value = value.copyWith();
   }
 
-  void setAudioTrack(String? name, int? index) {
-    _videoPlayerPlatform.setAudioTrack(_textureId, name, index);
+  Future<List<Map<String, dynamic>>?> getAudioTracks() =>
+      _videoPlayerPlatform.getAudioTracks(_textureId);
+
+  Future<void> setAudioTrack(String? name, int? index,
+      {String? nativeTrackId, String? formatId, String? language}) {
+    return _videoPlayerPlatform.setAudioTrack(_textureId, name, index,
+        nativeTrackId: nativeTrackId, formatId: formatId, language: language);
   }
 
   void setMixWithOthers(bool mixWithOthers) {

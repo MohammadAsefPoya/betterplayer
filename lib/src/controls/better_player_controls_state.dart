@@ -407,9 +407,16 @@ abstract class BetterPlayerControlsState<T extends StatefulWidget>
   Widget _buildAudioTrackRow(
       BetterPlayerAsmsAudioTrack audioTrack, bool isSelected) {
     return BetterPlayerMaterialClickableWidget(
-      onTap: () {
+      onTap: () async {
         Navigator.of(context).pop();
-        betterPlayerController!.setAudioTrack(audioTrack);
+        try {
+          await betterPlayerController!.setAudioTrack(audioTrack);
+        } catch (error) {
+          betterPlayerController!.postEvent(BetterPlayerEvent(
+            BetterPlayerEventType.exception,
+            parameters: <String, dynamic>{'exception': error.toString()},
+          ));
+        }
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),

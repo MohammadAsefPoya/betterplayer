@@ -95,6 +95,13 @@ internal class BetterPlayer(
     private var refreshRunnable: Runnable? = null
     private var exoPlayerEventListener: Player.Listener? = null
     private var playbackEventListener: Player.Listener? = null
+    private var lastTrackSelections: com.google.android.exoplayer2.trackselection.TrackSelectionArray? = null
+    private var pendingAudioResult: MethodChannel.Result? = null
+    private var pendingAudioGroup: com.google.android.exoplayer2.source.TrackGroup? = null
+    private var pendingAudioTrackIndex = -1
+    private val audioSelectionHandler = Handler(Looper.getMainLooper())
+    private var audioSelectionTimeout: Runnable? = null
+    private var audioSelectionRefresh: Runnable? = null
     private var bitmap: Bitmap? = null
     private var mediaSession: MediaSessionCompat? = null
     private var drmSessionManager: DrmSessionManager? = null
@@ -669,9 +676,11 @@ internal class BetterPlayer(
         exoPlayer?.addListener(object : Player.Listener {
             @Suppress("DEPRECATION")
             override fun onTracksChanged(trackGroups: TrackGroupArray, trackSelections: com.google.android.exoplayer2.trackselection.TrackSelectionArray) {
+                lastTrackSelections = trackSelections
                 if (hasManualTrackSelection) {
                     applySelectedTrackParameters()
                 }
+                completeAudioSelectionIfActive(trackSelections)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1036,9 +1045,8 @@ internal class BetterPlayer(
         if (videoRendererIndex != null) {
             parametersBuilder.setRendererDisabled(videoRendererIndex, false)
             parametersBuilder.setTrackSelectionOverrides(
-                TrackSelectionOverrides.Builder()
-                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-                    .build()
+                trackSelector.parameters.trackSelectionOverrides.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO).build()
             )
 
             if (hasManualTrackSelection && mappedTrackInfo != null) {
@@ -1046,7 +1054,7 @@ internal class BetterPlayer(
                 val selectionOverride = findVideoSelectionOverride(videoTrackGroups)
                 if (selectionOverride != null) {
                     parametersBuilder.setTrackSelectionOverrides(
-                        TrackSelectionOverrides.Builder()
+                        trackSelector.parameters.trackSelectionOverrides.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
                             .addOverride(selectionOverride)
                             .build()
@@ -1191,74 +1199,158 @@ internal class BetterPlayer(
         mediaSession = null
     }
 
-    fun setAudioTrack(name: String, index: Int) {
-        try {
-            val mappedTrackInfo = trackSelector.currentMappedTrackInfo
-            if (mappedTrackInfo != null) {
-                for (rendererIndex in 0 until mappedTrackInfo.rendererCount) {
-                    if (mappedTrackInfo.getRendererType(rendererIndex) != C.TRACK_TYPE_AUDIO) {
-                        continue
-                    }
-                    val trackGroupArray = mappedTrackInfo.getTrackGroups(rendererIndex)
-                    var hasElementWithoutLabel = false
-                    var hasStrangeAudioTrack = false
-                    for (groupIndex in 0 until trackGroupArray.length) {
-                        val group = trackGroupArray[groupIndex]
-                        for (groupElementIndex in 0 until group.length) {
-                            val format = group.getFormat(groupElementIndex)
-                            if (format.label == null) {
-                                hasElementWithoutLabel = true
-                            }
-                            if (format.id != null && format.id == "1/15") {
-                                hasStrangeAudioTrack = true
-                            }
-                        }
-                    }
-                    for (groupIndex in 0 until trackGroupArray.length) {
-                        val group = trackGroupArray[groupIndex]
-                        for (groupElementIndex in 0 until group.length) {
-                            val label = group.getFormat(groupElementIndex).label
-                            if (name == label && index == groupIndex) {
-                                setAudioTrack(rendererIndex, groupIndex, groupElementIndex)
-                                return
-                            }
+    private data class AudioTrackCandidate(
+        val rendererIndex: Int,
+        val groupIndex: Int,
+        val trackIndex: Int,
+        val group: com.google.android.exoplayer2.source.TrackGroup,
+        val format: Format
+    ) {
+        val nativeId: String
+            get() = "$rendererIndex:$groupIndex:$trackIndex:${format.id ?: ""}"
+    }
 
-                            ///Fallback option
-                            if (!hasStrangeAudioTrack && hasElementWithoutLabel && index == groupIndex) {
-                                setAudioTrack(rendererIndex, groupIndex, groupElementIndex)
-                                return
-                            }
-                            ///Fallback option
-                            if (hasStrangeAudioTrack && name == label) {
-                                setAudioTrack(rendererIndex, groupIndex, groupElementIndex)
-                                return
-                            }
-                        }
-                    }
+    private fun audioTrackCandidates(): List<AudioTrackCandidate> {
+        val info = trackSelector.currentMappedTrackInfo ?: return emptyList()
+        val candidates = mutableListOf<AudioTrackCandidate>()
+        for (rendererIndex in 0 until info.rendererCount) {
+            if (info.getRendererType(rendererIndex) != C.TRACK_TYPE_AUDIO) continue
+            val groups = info.getTrackGroups(rendererIndex)
+            for (groupIndex in 0 until groups.length) {
+                val group = groups.get(groupIndex)
+                for (trackIndex in 0 until group.length) {
+                    candidates.add(AudioTrackCandidate(rendererIndex, groupIndex, trackIndex,
+                        group, group.getFormat(trackIndex)))
                 }
             }
-        } catch (exception: Exception) {
-            Log.e(TAG, "setAudioTrack failed$exception")
+        }
+        return candidates
+    }
+
+    private fun isAudioTrackActive(candidate: AudioTrackCandidate): Boolean {
+        val selection = lastTrackSelections?.let {
+            if (candidate.rendererIndex < it.length) it.get(candidate.rendererIndex) else null
+        } ?: return false
+        if (selection.trackGroup != candidate.group) return false
+        return if (selection is com.google.android.exoplayer2.trackselection.ExoTrackSelection) {
+            selection.selectedIndexInTrackGroup == candidate.trackIndex
+        } else {
+            selection.length() == 1 && selection.getIndexInTrackGroup(0) == candidate.trackIndex
         }
     }
 
-    private fun setAudioTrack(rendererIndex: Int, groupIndex: Int, groupElementIndex: Int) {
-        val mappedTrackInfo = trackSelector.currentMappedTrackInfo
-        if (mappedTrackInfo != null) {
-            val builder = trackSelector.parameters.buildUpon()
-                .setRendererDisabled(rendererIndex, false)
-                .setTrackSelectionOverrides(
-                    TrackSelectionOverrides.Builder().addOverride(
-                        TrackSelectionOverrides.TrackSelectionOverride(
-                            mappedTrackInfo.getTrackGroups(
-                                rendererIndex
-                            ).get(groupIndex)
-                        )
-                    ).build()
-                )
+    fun getAudioTracks(): List<Map<String, Any?>> = audioTrackCandidates().mapIndexed { index, track ->
+        mapOf(
+            "id" to index,
+            "nativeTrackId" to track.nativeId,
+            "formatId" to track.format.id,
+            "label" to track.format.label,
+            "language" to track.format.language,
+            "selected" to isAudioTrackActive(track)
+        )
+    }
 
-            trackSelector.setParameters(builder)
+    fun setAudioTrack(
+        name: String?, index: Int?, nativeTrackId: String?, formatId: String?,
+        language: String?, result: MethodChannel.Result
+    ) {
+        try {
+            pendingAudioResult?.error("superseded", "A newer audio track was requested", null)
+            clearPendingAudioSelection()
+            if (nativeTrackId == null && formatId == null && name == null && language == null) {
+                val overrides = trackSelector.parameters.trackSelectionOverrides.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
+                trackSelector.setParameters(trackSelector.parameters.buildUpon()
+                    .setTrackSelectionOverrides(overrides))
+                result.success(null)
+                return
+            }
+            val available = audioTrackCandidates()
+            var matches = if (nativeTrackId != null) {
+                available.filter { it.nativeId == nativeTrackId }
+            } else emptyList()
+            if (nativeTrackId != null && matches.isEmpty()) {
+                result.error("audio_track_not_found", "Audio track identity is no longer available", null)
+                return
+            }
+            if (matches.isEmpty() && formatId != null) {
+                matches = available.filter { it.format.id == formatId }
+            }
+            if (matches.isEmpty()) {
+                matches = available.filter {
+                    (name == null || it.format.label == name) &&
+                    (language == null || it.format.language == language)
+                }
+            }
+            if (matches.size != 1) {
+                result.error("audio_track_not_found", "Expected one matching audio track; found ${matches.size}", null)
+                return
+            }
+            val selected = matches.single()
+            val currentSelection = lastTrackSelections?.let {
+                if (selected.rendererIndex < it.length) it.get(selected.rendererIndex) else null
+            }
+            if (isAudioTrackActive(selected) && currentSelection?.length() == 1) {
+                result.success(null)
+                return
+            }
+            pendingAudioResult = result
+            pendingAudioGroup = selected.group
+            pendingAudioTrackIndex = selected.trackIndex
+            val timeout = Runnable {
+                pendingAudioResult?.error("audio_track_timeout", "Audio track did not become active", null)
+                clearPendingAudioSelection()
+            }
+            audioSelectionTimeout = timeout
+            audioSelectionHandler.postDelayed(timeout, 3000L)
+            val refresh = Runnable {
+                val player = exoPlayer
+                if (pendingAudioResult != null && player != null &&
+                    player.bufferedPosition > player.currentPosition + 1000L) {
+                    val position = player.currentPosition
+                    val playWhenReady = player.playWhenReady
+                    player.seekTo(position)
+                    player.playWhenReady = playWhenReady
+                }
+            }
+            audioSelectionRefresh = refresh
+            audioSelectionHandler.postDelayed(refresh, 700L)
+            val overrides = trackSelector.parameters.trackSelectionOverrides.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .addOverride(TrackSelectionOverrides.TrackSelectionOverride(
+                    selected.group, listOf(selected.trackIndex))).build()
+            trackSelector.setParameters(trackSelector.parameters.buildUpon()
+                .setRendererDisabled(selected.rendererIndex, false)
+                .setTrackSelectionOverrides(overrides))
+        } catch (exception: Exception) {
+            clearPendingAudioSelection()
+            result.error("audio_track_failed", exception.message, null)
         }
+    }
+
+    private fun completeAudioSelectionIfActive(
+        selections: com.google.android.exoplayer2.trackselection.TrackSelectionArray
+    ) {
+        val group = pendingAudioGroup ?: return
+        for (rendererIndex in 0 until selections.length) {
+            val selection = selections.get(rendererIndex) ?: continue
+            if (selection.trackGroup == group && selection.length() == 1 &&
+                selection.getIndexInTrackGroup(0) == pendingAudioTrackIndex) {
+                pendingAudioResult?.success(null)
+                clearPendingAudioSelection()
+                return
+            }
+        }
+    }
+
+    private fun clearPendingAudioSelection() {
+        audioSelectionTimeout?.let { audioSelectionHandler.removeCallbacks(it) }
+        audioSelectionRefresh?.let { audioSelectionHandler.removeCallbacks(it) }
+        audioSelectionTimeout = null
+        audioSelectionRefresh = null
+        pendingAudioResult = null
+        pendingAudioGroup = null
+        pendingAudioTrackIndex = -1
     }
 
     private fun sendSeekToEvent(positionMs: Long) {
@@ -1274,6 +1366,8 @@ internal class BetterPlayer(
     }
 
     fun dispose() {
+        pendingAudioResult?.error("disposed", "Player was disposed", null)
+        clearPendingAudioSelection()
         stopRecoverableErrorRecoveryLoop()
         recoverableErrorHandler = null
         stopBufferingTimeoutWatchdog()

@@ -213,6 +213,13 @@ class BetterPlayerController {
   ///Selected videoPlayerValue when error occurred.
   VideoPlayerValue? _videoPlayerValueOnError;
 
+  ///The most recent seek which has not completed successfully.
+  Duration? _pendingSeekPosition;
+  int _seekRequestId = 0;
+
+  ///The play state requested by this controller, including after an error.
+  bool? _requestedPlayState;
+
   ///Flag which holds information about player visibility
   bool _isPlayerVisible = true;
 
@@ -225,7 +232,11 @@ class BetterPlayerController {
       _controllerEventStreamController.stream;
 
   ///Flag which determines whether are ASMS segments loading
-  bool _asmsSegmentsLoading = false;
+  Set<String> _asmsSegmentsInFlight = <String>{};
+  final Map<String, int> _asmsSegmentFailures = <String, int>{};
+  final Map<String, DateTime> _asmsSegmentNextRetryAt = <String, DateTime>{};
+  final List<Timer> _asmsSegmentRetryTimers = <Timer>[];
+  int _subtitleSelectionVersion = 0;
 
   /// Flag which determines whether ASMS metadata was loaded successfully.
   bool _asmsDataLoadedSuccessfully = false;
@@ -305,7 +316,12 @@ class BetterPlayerController {
     } else {
       _telemetryManager.stopSession();
     }
+    return _setupDataSourceWithConfiguration(betterPlayerDataSource);
+  }
 
+  Future<void> _setupDataSourceWithConfiguration(
+      BetterPlayerDataSource betterPlayerDataSource,
+      {bool recovering = false}) async {
     postEvent(BetterPlayerEvent(BetterPlayerEventType.setupDataSource,
         parameters: <String, dynamic>{
           _dataSourceParameter: betterPlayerDataSource,
@@ -317,6 +333,11 @@ class BetterPlayerController {
     _asmsDataLoadInProgress = false;
     _asmsDataLoadFailed = false;
     _betterPlayerDataSource = betterPlayerDataSource;
+    if (!recovering) {
+      _pendingSeekPosition = null;
+      _requestedPlayState = null;
+      _videoPlayerValueOnError = null;
+    }
     _betterPlayerSubtitlesSourceList.clear();
 
     ///Build videoPlayerController if null
@@ -349,7 +370,7 @@ class BetterPlayerController {
     }
 
     ///Process data source
-    await _setupDataSource(betterPlayerDataSource);
+    await _setupDataSource(betterPlayerDataSource, recovering: recovering);
     setTrack(BetterPlayerAsmsTrack.defaultTrack());
   }
 
@@ -457,9 +478,7 @@ class BetterPlayerController {
       ///Load audio tracks
       if (source.useAsmsAudioTracks == true && _isDataSourceAsms(source)) {
         _betterPlayerAsmsAudioTracks = response.audios ?? [];
-        if (_betterPlayerAsmsAudioTracks?.isNotEmpty == true) {
-          setAudioTrack(_betterPlayerAsmsAudioTracks!.first);
-        }
+        await _refreshNativeAudioTracks();
       }
 
       _asmsDataLoadedSuccessfully = true;
@@ -475,6 +494,40 @@ class BetterPlayerController {
     } finally {
       _asmsDataLoadInProgress = false;
     }
+  }
+
+  Future<void> _refreshNativeAudioTracks() async {
+    final source = _betterPlayerDataSource;
+    final controller = videoPlayerController;
+    if (!Platform.isAndroid ||
+        source?.useAsmsAudioTracks != true ||
+        controller?.value.initialized != true) {
+      return;
+    }
+    List<Map<String, dynamic>>? nativeTracks;
+    try {
+      nativeTracks = await controller!.getAudioTracks();
+    } catch (error) {
+      BetterPlayerUtils.log('Could not read native audio tracks: $error');
+      return;
+    }
+    if (source != _betterPlayerDataSource ||
+        nativeTracks == null ||
+        nativeTracks.isEmpty) {
+      return;
+    }
+    _betterPlayerAsmsAudioTracks = nativeTracks
+        .map((track) => BetterPlayerAsmsAudioTrack(
+              id: track['id'] as int?,
+              label: track['label'] as String?,
+              language: track['language'] as String?,
+              formatId: track['formatId'] as String?,
+              nativeTrackId: track['nativeTrackId'] as String?,
+              isSelected: track['selected'] == true,
+            ))
+        .toList();
+    _betterPlayerAsmsAudioTrack = _betterPlayerAsmsAudioTracks!
+        .firstWhereOrNull((track) => track.isSelected);
   }
 
   Future<void> _retryAsmsDataSourceIfNeeded() async {
@@ -496,78 +549,108 @@ class BetterPlayerController {
   }
 
   ///Setup subtitles to be displayed from given subtitle source.
-  ///If subtitles source is segmented then don't load videos at start. Videos
-  ///will load with just in time policy.
   Future<void> setupSubtitleSource(BetterPlayerSubtitlesSource subtitlesSource,
       {bool sourceInitialize = false}) async {
+    final version = ++_subtitleSelectionVersion;
+    final hadVisibleSubtitles =
+        subtitlesLines.isNotEmpty || renderedSubtitle != null;
     _betterPlayerSubtitlesSource = subtitlesSource;
     subtitlesLines.clear();
+    renderedSubtitle = null;
     _asmsSegmentsLoaded.clear();
-    _asmsSegmentsLoading = false;
+    _asmsSegmentsInFlight = <String>{};
+    _asmsSegmentFailures.clear();
+    _asmsSegmentNextRetryAt.clear();
+    for (final timer in _asmsSegmentRetryTimers) {
+      timer.cancel();
+    }
+    _asmsSegmentRetryTimers.clear();
+    if (hadVisibleSubtitles || subtitlesSource.asmsIsSegmented == true) {
+      _notifySubtitlesChanged(sourceInitialize: sourceInitialize);
+    }
 
     if (subtitlesSource.type != BetterPlayerSubtitlesSourceType.none) {
       if (subtitlesSource.asmsIsSegmented == true) {
+        await _loadAsmsSubtitlesSegments(
+            videoPlayerController?.value.position ?? Duration.zero);
         return;
       }
       final subtitlesParsed =
           await BetterPlayerSubtitlesFactory.parseSubtitles(subtitlesSource);
+      if (version != _subtitleSelectionVersion) return;
       subtitlesLines.addAll(subtitlesParsed);
     }
 
+    if (!hadVisibleSubtitles || subtitlesSource.type != BetterPlayerSubtitlesSourceType.none) {
+      _notifySubtitlesChanged(sourceInitialize: sourceInitialize);
+    }
+  }
+
+  void _notifySubtitlesChanged({bool sourceInitialize = false}) {
     _postEvent(BetterPlayerEvent(BetterPlayerEventType.changedSubtitles));
     if (!_disposed && !sourceInitialize) {
       _postControllerEvent(BetterPlayerControllerEvent.changeSubtitles);
     }
+    videoPlayerController?.refresh();
   }
 
-  ///Load ASMS subtitles segments for given [position].
-  ///Segments are being loaded within range (current video position;endPosition)
-  ///where endPosition is based on time segment detected in HLS playlist. If
-  ///time segment is not present then 5000 ms will be used. Also time segment
-  ///is multiplied by 5 to increase window of duration.
-  ///Segments are also cached, so same segment won't load twice. Only one
-  ///pack of segments can be load at given time.
-  Future _loadAsmsSubtitlesSegments(Duration position) async {
-    try {
-      if (_asmsSegmentsLoading) {
-        return;
-      }
-      _asmsSegmentsLoading = true;
-      final BetterPlayerSubtitlesSource? source = _betterPlayerSubtitlesSource;
-      final Duration loadDurationEnd = Duration(
-          milliseconds: position.inMilliseconds +
-              5 * (_betterPlayerSubtitlesSource?.asmsSegmentsTime ?? 5000));
-
-      final segmentsToLoad = _betterPlayerSubtitlesSource?.asmsSegments
-          ?.where((segment) {
-            return segment.startTime > position &&
-                segment.endTime < loadDurationEnd &&
-                !_asmsSegmentsLoaded.contains(segment.realUrl);
-          })
-          .map((segment) => segment.realUrl)
-          .toList();
-
-      if (segmentsToLoad != null && segmentsToLoad.isNotEmpty) {
-        final subtitlesParsed =
-            await BetterPlayerSubtitlesFactory.parseSubtitles(
-                BetterPlayerSubtitlesSource(
-          type: _betterPlayerSubtitlesSource!.type,
-          headers: _betterPlayerSubtitlesSource!.headers,
-          urls: segmentsToLoad,
-        ));
-
-        ///Additional check if current source of subtitles is same as source
-        ///used to start loading subtitles. It can be different when user
-        ///changes subtitles and there was already pending load.
-        if (source == _betterPlayerSubtitlesSource) {
-          subtitlesLines.addAll(subtitlesParsed);
-          _asmsSegmentsLoaded.addAll(segmentsToLoad);
+  ///Load the segment at [position] and the next five segments in the window.
+  Future<void> _loadAsmsSubtitlesSegments(Duration position) async {
+    final source = _betterPlayerSubtitlesSource;
+    if (source?.asmsIsSegmented != true) return;
+    final version = _subtitleSelectionVersion;
+    final windowEnd = position +
+        Duration(milliseconds: 5 * (source!.asmsSegmentsTime ?? 5000));
+    final segments = source.asmsSegments
+            ?.where((segment) =>
+                segment.endTime > position && segment.startTime < windowEnd)
+            .toList() ??
+        [];
+    final inFlight = _asmsSegmentsInFlight;
+    await Future.wait(segments.map((segment) async {
+      final url = segment.realUrl;
+      final retryAt = _asmsSegmentNextRetryAt[url];
+      if (retryAt != null && DateTime.now().isBefore(retryAt)) return;
+      if (_asmsSegmentsLoaded.contains(url) || !inFlight.add(url)) return;
+      try {
+        final subtitles =
+            await BetterPlayerSubtitlesFactory.parseSegment(source, url);
+        if (version != _subtitleSelectionVersion ||
+            source != _betterPlayerSubtitlesSource) return;
+        final segmentDuration = segment.endTime - segment.startTime;
+        final cuesAreSegmentRelative = segment.startTime > Duration.zero &&
+            subtitles.isNotEmpty &&
+            subtitles.every((cue) =>
+                cue.start != null &&
+                cue.end != null &&
+                cue.start! < segment.startTime &&
+                cue.end! <= segmentDuration);
+        subtitlesLines.addAll(cuesAreSegmentRelative
+            ? subtitles.map((cue) => cue.shiftedBy(segment.startTime))
+            : subtitles);
+        _asmsSegmentsLoaded.add(url);
+        _asmsSegmentFailures.remove(url);
+        _asmsSegmentNextRetryAt.remove(url);
+        _notifySubtitlesChanged();
+      } catch (error) {
+        if (version != _subtitleSelectionVersion) return;
+        BetterPlayerUtils.log('Load ASMS subtitle segment failed: $error');
+        final failures = (_asmsSegmentFailures[url] ?? 0) + 1;
+        _asmsSegmentFailures[url] = failures;
+        _asmsSegmentNextRetryAt[url] =
+            DateTime.now().add(Duration(seconds: failures < 3 ? failures : 3));
+        if (failures < 3) {
+          _asmsSegmentRetryTimers.add(Timer(Duration(seconds: failures), () {
+            if (version == _subtitleSelectionVersion) {
+              _loadAsmsSubtitlesSegments(
+                  videoPlayerController?.value.position ?? position);
+            }
+          }));
         }
+      } finally {
+        inFlight.remove(url);
       }
-      _asmsSegmentsLoading = false;
-    } catch (exception) {
-      BetterPlayerUtils.log("Load ASMS subtitle segments failed: $exception");
-    }
+    }));
   }
 
   ///Get VideoFormat from BetterPlayerVideoFormat (adapter method which translates
@@ -590,7 +673,8 @@ class BetterPlayerController {
   }
 
   ///Internal method which invokes videoPlayerController source setup.
-  Future _setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
+  Future _setupDataSource(BetterPlayerDataSource betterPlayerDataSource,
+      {bool recovering = false}) async {
     switch (betterPlayerDataSource.type) {
       case BetterPlayerDataSourceType.network:
         await videoPlayerController?.setNetworkDataSource(
@@ -678,7 +762,7 @@ class BetterPlayerController {
         throw UnimplementedError(
             "${betterPlayerDataSource.type} is not implemented");
     }
-    await _initializeVideo();
+    await _initializeVideo(recovering: recovering);
   }
 
   ///Create file from provided list of bytes. File will be created in temporary
@@ -694,9 +778,9 @@ class BetterPlayerController {
 
   ///Initializes video based on configuration. Invoke actions which need to be
   ///run on player start.
-  Future _initializeVideo() async {
-    setLooping(betterPlayerConfiguration.looping);
-    _videoEventStreamSubscription?.cancel();
+  Future _initializeVideo({bool recovering = false}) async {
+    await setLooping(betterPlayerConfiguration.looping);
+    await _videoEventStreamSubscription?.cancel();
     _videoEventStreamSubscription = null;
 
     _videoEventStreamSubscription = videoPlayerController
@@ -704,7 +788,7 @@ class BetterPlayerController {
         .listen(_handleVideoEvent);
 
     final fullScreenByDefault = betterPlayerConfiguration.fullScreenByDefault;
-    if (betterPlayerConfiguration.autoPlay) {
+    if (betterPlayerConfiguration.autoPlay && !recovering) {
       if (fullScreenByDefault && !isFullScreen) {
         enterFullScreen();
       }
@@ -725,8 +809,8 @@ class BetterPlayerController {
     }
 
     final startAt = betterPlayerConfiguration.startAt;
-    if (startAt != null) {
-      seekTo(startAt);
+    if (startAt != null && !recovering) {
+      await seekTo(startAt);
     }
   }
 
@@ -767,6 +851,7 @@ class BetterPlayerController {
       throw StateError("The data source has not been initialized");
     }
 
+    _requestedPlayState = true;
     if (_appLifecycleState == AppLifecycleState.resumed) {
       await videoPlayerController!.play();
       _hasCurrentDataSourceStarted = true;
@@ -791,6 +876,7 @@ class BetterPlayerController {
       throw StateError("The data source has not been initialized");
     }
 
+    _requestedPlayState = false;
     await videoPlayerController!.pause();
     _postEvent(BetterPlayerEvent(BetterPlayerEventType.pause));
   }
@@ -805,8 +891,12 @@ class BetterPlayerController {
     }
 
     final Duration fromDuration = videoPlayerController!.value.position;
-
+    final requestId = ++_seekRequestId;
+    _pendingSeekPosition = moment;
     await videoPlayerController!.seekTo(moment);
+    if (requestId == _seekRequestId) {
+      _pendingSeekPosition = null;
+    }
 
     _postEvent(BetterPlayerEvent(BetterPlayerEventType.seekTo,
         parameters: <String, dynamic>{
@@ -935,6 +1025,7 @@ class BetterPlayerController {
     if (currentVideoPlayerValue.initialized &&
         !_hasCurrentDataSourceInitialized) {
       _hasCurrentDataSourceInitialized = true;
+      _refreshNativeAudioTracks();
       _postEvent(BetterPlayerEvent(BetterPlayerEventType.initialized));
     }
     if (currentVideoPlayerValue.isPip) {
@@ -1313,7 +1404,7 @@ class BetterPlayerController {
   void _handleVideoEvent(VideoEvent event) async {
     switch (event.eventType) {
       case VideoEventType.play:
-        _videoPlayerValueOnError = null;
+        _requestedPlayState = true;
         if (videoPlayerController != null &&
             videoPlayerController!.value.isPlaying != true) {
           videoPlayerController!.value =
@@ -1322,6 +1413,7 @@ class BetterPlayerController {
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.play));
         break;
       case VideoEventType.pause:
+        _requestedPlayState = false;
         if (videoPlayerController != null &&
             videoPlayerController!.value.isPlaying != false) {
           videoPlayerController!.value =
@@ -1363,7 +1455,6 @@ class BetterPlayerController {
             }));
         break;
       case VideoEventType.bufferingEnd:
-        _videoPlayerValueOnError = null;
         _postEvent(BetterPlayerEvent(BetterPlayerEventType.bufferingEnd));
         _retryAsmsDataSourceIfNeeded();
         break;
@@ -1420,29 +1511,82 @@ class BetterPlayerController {
   }
 
   ///Retry data source if playback failed.
-  Future retryDataSource() async {
-    await _setupDataSource(_betterPlayerDataSource!);
-    if (_videoPlayerValueOnError != null) {
-      final position = _videoPlayerValueOnError!.position;
+  Future<void> retryDataSource(
+      {Duration? resumePosition, bool? playOnSuccess}) async {
+    final dataSource = _betterPlayerDataSource;
+    if (dataSource == null) {
+      throw StateError("The data source has not been initialized");
+    }
+    final position = resumePosition ??
+        _pendingSeekPosition ??
+        _videoPlayerValueOnError?.position ??
+        videoPlayerController?.value.position ??
+        Duration.zero;
+    final shouldPlay = playOnSuccess ??
+        _requestedPlayState ??
+        videoPlayerController?.value.isPlaying ??
+        false;
+
+    try {
+      await _setupDataSourceWithConfiguration(dataSource, recovering: true);
       await seekTo(position);
-      await play();
+      if (shouldPlay) {
+        await play();
+      } else {
+        await pause();
+      }
+      final duration = videoPlayerController!.value.duration;
+      final expectedPosition = duration == null
+          ? position
+          : position < Duration.zero
+              ? Duration.zero
+              : position > duration
+                  ? duration
+                  : position;
+      if (expectedPosition > Duration.zero) {
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        while (true) {
+          final actualPosition =
+              await videoPlayerController!.position ?? Duration.zero;
+          if (actualPosition > Duration.zero &&
+              actualPosition + const Duration(seconds: 2) >= expectedPosition) {
+            break;
+          }
+          if (DateTime.now().isAfter(deadline)) {
+            throw StateError('Retry did not restore the playback position');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
       _videoPlayerValueOnError = null;
+    } catch (_) {
+      _pendingSeekPosition = position;
+      _requestedPlayState = shouldPlay;
+      rethrow;
     }
   }
 
-  ///Set [audioTrack] in player. Works only for HLS or DASH streams.
-  void setAudioTrack(BetterPlayerAsmsAudioTrack audioTrack) {
+  ///Select [audioTrack] in an HLS or DASH stream. Completes when native
+  ///playback has selected that track, or throws if selection fails.
+  Future<void> setAudioTrack(BetterPlayerAsmsAudioTrack audioTrack) async {
     if (videoPlayerController == null) {
       throw StateError("The data source has not been initialized");
     }
 
-    if (audioTrack.language == null) {
-      _betterPlayerAsmsAudioTrack = null;
-      return;
+    final isDefault = audioTrack.id == null &&
+        audioTrack.nativeTrackId == null &&
+        audioTrack.formatId == null &&
+        (audioTrack.label == null ||
+            audioTrack.label == translations.generalDefault);
+    await videoPlayerController!.setAudioTrack(
+        isDefault ? null : audioTrack.label, isDefault ? null : audioTrack.id,
+        nativeTrackId: audioTrack.nativeTrackId,
+        formatId: audioTrack.formatId,
+        language: isDefault ? null : audioTrack.language);
+    _betterPlayerAsmsAudioTrack = isDefault ? null : audioTrack;
+    if (!isDefault) {
+      await _refreshNativeAudioTracks();
     }
-
-    _betterPlayerAsmsAudioTrack = audioTrack;
-    videoPlayerController!.setAudioTrack(audioTrack.label, audioTrack.id);
   }
 
   ///Enable or disable audio mixing with other sound within device.
@@ -1531,6 +1675,10 @@ class BetterPlayerController {
       // Start the final telemetry flush while the video controller still has
       // its last position available.
       _telemetryManager.dispose(isFinal: true);
+      for (final timer in _asmsSegmentRetryTimers) {
+        timer.cancel();
+      }
+      _asmsSegmentRetryTimers.clear();
       if (videoPlayerController != null) {
         pause();
         videoPlayerController!.removeListener(_onFullScreenStateChanged);

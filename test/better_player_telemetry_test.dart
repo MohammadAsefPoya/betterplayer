@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -19,7 +18,7 @@ void main() {
   });
 
   setUp(() {
-    TestDefaultBinaryMessengerBinding.instance!.defaultBinaryMessenger
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
             mockMethodChannel.channel, mockMethodChannel.handle);
   });
@@ -162,12 +161,11 @@ void main() {
       );
       expect(
         config.startSessionUri.toString(),
-        equals(
-            'https://telemetry.example.com/api/v1/statistics/sessions/start'),
+        equals('https://telemetry.example.com/v1/statistics/sessions/start'),
       );
       expect(
         config.batchEventsUri.toString(),
-        equals('https://telemetry.example.com/api/v1/statistics/events/batch'),
+        equals('https://telemetry.example.com/v1/statistics/events/batch'),
       );
     });
 
@@ -422,7 +420,7 @@ void main() {
         final body = await utf8.decodeStream(request);
         final json = jsonDecode(body) as Map<String, dynamic>;
 
-        if (request.uri.path == 'v1/statistics/sessions/start') {
+        if (request.uri.path == '/v1/statistics/sessions/start') {
           receivedStartRequests.add(json);
           receivedStartHeaders.add(request.headers);
           request.response
@@ -430,7 +428,7 @@ void main() {
             ..headers.contentType = ContentType.json
             ..write(jsonEncode({'success': true, 'alreadyExists': false}))
             ..close();
-        } else if (request.uri.path == 'v1/statistics/events/batch') {
+        } else if (request.uri.path == '/v1/statistics/events/batch') {
           receivedBatchRequests.add(json);
           receivedBatchHeaders.add(request.headers);
           final statusCode = batchResponseStatusCodes.isEmpty
@@ -819,6 +817,13 @@ void main() {
       expect(receivedStartRequests.first['episodeId'], equals(201));
       expect(receivedStartRequests.first['os'],
           equals(BetterPlayerTelemetryUtils.getOperatingSystem()));
+
+      // Decoder recovery rebuilds the same source without starting a new
+      // viewing session or discarding telemetry collected for this episode.
+      await controller.retryDataSource(
+          resumePosition: Duration.zero, playOnSuccess: false);
+      expect(controller.sessionId, equals(session2Id));
+      expect(receivedStartRequests, hasLength(1));
 
       // 3. THIRD SETUP: Telemetry is null -> Flushes prior session, stops telemetry
       final ds3 =

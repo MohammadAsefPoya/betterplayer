@@ -5,6 +5,26 @@ import 'package:better_player/src/core/better_player_utils.dart';
 import 'better_player_subtitle.dart';
 
 class BetterPlayerSubtitlesFactory {
+  ///Fetch one ASMS segment. Unlike the general parser, failed requests throw
+  ///so the caller can retry without caching an empty result.
+  static Future<List<BetterPlayerSubtitle>> parseSegment(
+      BetterPlayerSubtitlesSource source, String url) async {
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(Uri.parse(url));
+      source.headers
+          ?.forEach((name, value) => request.headers.add(name, value));
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('Subtitle segment returned ${response.statusCode}',
+            uri: Uri.parse(url));
+      }
+      return _parseString(await response.transform(const Utf8Decoder()).join());
+    } finally {
+      client.close();
+    }
+  }
+
   static Future<List<BetterPlayerSubtitle>> parseSubtitles(
       BetterPlayerSubtitlesSource source) async {
     switch (source.type) {

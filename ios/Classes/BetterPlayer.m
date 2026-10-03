@@ -913,8 +913,10 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
     }
 }
 
-- (void) setAudioTrack:(NSString*) name index:(int) index{
+- (BOOL) setAudioTrack:(NSString*) name index:(int) index{
+    if (name == nil) return YES;
     AVMediaSelectionGroup *audioSelectionGroup = [[[_player currentItem] asset] mediaSelectionGroupForMediaCharacteristic: AVMediaCharacteristicAudible];
+    if (audioSelectionGroup == nil) return NO;
     NSArray* options = audioSelectionGroup.options;
 
 
@@ -925,11 +927,12 @@ static inline CGFloat radiansToDegrees(CGFloat radians) {
             NSString *title = ((AVMetadataItem*)[metaDatas objectAtIndex:0]).stringValue;
             if ([name compare:title] == NSOrderedSame && audioTrackIndex == index ){
                 [[_player currentItem] selectMediaOption:option inMediaSelectionGroup: audioSelectionGroup];
+                return YES;
             }
         }
 
     }
-
+    return NO;
 }
 
 - (void)setMixWithOthers:(bool)mixWithOthers {

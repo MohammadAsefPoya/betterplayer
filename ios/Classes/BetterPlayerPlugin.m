@@ -419,9 +419,16 @@ bool _remoteCommandsInitialized = false;
             [player setPictureInPicture:false];
             result(nil);
         } else if ([@"setAudioTrack" isEqualToString:call.method]){
-            NSString* name = argsMap[@"name"];
-            int index = [argsMap[@"index"] intValue];
-            [player setAudioTrack:name index: index];
+            id rawName = argsMap[@"name"];
+            id rawIndex = argsMap[@"index"];
+            NSString* name = [rawName isKindOfClass:[NSString class]] ? rawName : nil;
+            int index = [rawIndex respondsToSelector:@selector(intValue)] ? [rawIndex intValue] : -1;
+            if ([player setAudioTrack:name index: index]) {
+                result(nil);
+            } else {
+                result([FlutterError errorWithCode:@"audio_track_not_found"
+                                           message:@"No matching audio track" details:nil]);
+            }
         } else if ([@"setMixWithOthers" isEqualToString:call.method]){
             [player setMixWithOthers:[argsMap[@"mixWithOthers"] boolValue]];
         } else if ([@"preCache" isEqualToString:call.method]){
