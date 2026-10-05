@@ -28,4 +28,5 @@ enum BetterPlayerEventType {
   changedPlaylistItem,
   videoSizeChanged,
   networkLog,
+  changedAudioTrack,
 }

@@ -65,7 +65,9 @@ class BetterPlayerDashUtils {
     final String segmentAlignmentStr =
         node.getAttribute('segmentAlignment') ?? '';
     String? label = node.getAttribute('label');
-    final String? language = node.getAttribute('lang');
+    final String? rawLang = node.getAttribute('lang');
+    final String language =
+        (rawLang != null && rawLang.trim().isNotEmpty) ? rawLang.trim() : 'und';
     final String? mimeType = node.getAttribute('mimeType');
 
     label ??= language;
@@ -83,7 +85,9 @@ class BetterPlayerDashUtils {
     final String segmentAlignmentStr =
         node.getAttribute('segmentAlignment') ?? '';
     String? name = node.getAttribute('label');
-    final String? language = node.getAttribute('lang');
+    final String? rawLang = node.getAttribute('lang');
+    final String language =
+        (rawLang != null && rawLang.trim().isNotEmpty) ? rawLang.trim() : 'und';
     final String? mimeType = node.getAttribute('mimeType');
     String? url =
         node.getElement('Representation')?.getElement('BaseURL')?.text;

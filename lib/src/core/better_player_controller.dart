@@ -299,11 +299,18 @@ class BetterPlayerController {
     String? platform,
     String? deviceType,
     String? os,
+    String? ip,
+    String? fileUrl,
     BetterPlayerTelemetryConfiguration? telemetryConfiguration,
   }) async {
     final effectiveTelemetryConfig =
         telemetryConfiguration ?? betterPlayerDataSource.telemetryConfiguration;
     if (effectiveTelemetryConfig != null && effectiveTelemetryConfig.hasValue) {
+      final effectiveIp = ip ?? betterPlayerDataSource.ip;
+      final effectiveFileUrl = fileUrl ??
+          betterPlayerDataSource.fileUrl ??
+          BetterPlayerTelemetryUtils.cleanFileUrl(betterPlayerDataSource.url);
+
       _telemetryManager.startSession(
         configuration: effectiveTelemetryConfig,
         telemetryData: BetterPlayerTelemetryData(
@@ -311,6 +318,8 @@ class BetterPlayerController {
           platform: platform ?? betterPlayerDataSource.platform,
           deviceType: deviceType ?? betterPlayerDataSource.deviceType,
           os: os ?? betterPlayerDataSource.os,
+          ip: effectiveIp,
+          fileUrl: effectiveFileUrl,
         ),
       );
     } else {
@@ -381,6 +390,8 @@ class BetterPlayerController {
     String? platform,
     String? deviceType,
     String? os,
+    String? ip,
+    String? fileUrl,
     BetterPlayerTelemetryConfiguration? telemetryConfiguration,
   }) =>
       setupDataSource(
@@ -389,6 +400,8 @@ class BetterPlayerController {
         platform: platform,
         deviceType: deviceType,
         os: os,
+        ip: ip,
+        fileUrl: fileUrl,
         telemetryConfiguration: telemetryConfiguration,
       );
 
@@ -517,14 +530,20 @@ class BetterPlayerController {
       return;
     }
     _betterPlayerAsmsAudioTracks = nativeTracks
-        .map((track) => BetterPlayerAsmsAudioTrack(
-              id: track['id'] as int?,
-              label: track['label'] as String?,
-              language: track['language'] as String?,
-              formatId: track['formatId'] as String?,
-              nativeTrackId: track['nativeTrackId'] as String?,
-              isSelected: track['selected'] == true,
-            ))
+        .map((track) {
+          final rawLang = track['language'] as String?;
+          final lang = (rawLang != null && rawLang.trim().isNotEmpty)
+              ? rawLang.trim()
+              : 'und';
+          return BetterPlayerAsmsAudioTrack(
+            id: track['id'] as int?,
+            label: track['label'] as String?,
+            language: lang,
+            formatId: track['formatId'] as String?,
+            nativeTrackId: track['nativeTrackId'] as String?,
+            isSelected: track['selected'] == true,
+          );
+        })
         .toList();
     _betterPlayerAsmsAudioTrack = _betterPlayerAsmsAudioTracks!
         .firstWhereOrNull((track) => track.isSelected);
@@ -554,6 +573,9 @@ class BetterPlayerController {
     final version = ++_subtitleSelectionVersion;
     final hadVisibleSubtitles =
         subtitlesLines.isNotEmpty || renderedSubtitle != null;
+    final previousSource = _betterPlayerSubtitlesSource;
+    final isSourceChanged =
+        !sourceInitialize && previousSource != subtitlesSource;
     _betterPlayerSubtitlesSource = subtitlesSource;
     subtitlesLines.clear();
     renderedSubtitle = null;
@@ -565,6 +587,24 @@ class BetterPlayerController {
       timer.cancel();
     }
     _asmsSegmentRetryTimers.clear();
+
+    if (isSourceChanged) {
+      final isFromNone = previousSource == null ||
+          previousSource.type == BetterPlayerSubtitlesSourceType.none;
+      final isToNone =
+          subtitlesSource.type == BetterPlayerSubtitlesSourceType.none;
+
+      _postEvent(BetterPlayerEvent(
+        BetterPlayerEventType.changedSubtitles,
+        parameters: <String, dynamic>{
+          'from': isFromNone ? 'none' : previousSource?.language,
+          'to': isToNone ? 'none' : subtitlesSource.language,
+          'isFromNone': isFromNone,
+          'isToNone': isToNone,
+        },
+      ));
+    }
+
     if (hadVisibleSubtitles || subtitlesSource.asmsIsSegmented == true) {
       _notifySubtitlesChanged(sourceInitialize: sourceInitialize);
     }
@@ -1573,6 +1613,11 @@ class BetterPlayerController {
       throw StateError("The data source has not been initialized");
     }
 
+    final previousTrack = _betterPlayerAsmsAudioTrack;
+    if (previousTrack == audioTrack) {
+      return;
+    }
+
     final isDefault = audioTrack.id == null &&
         audioTrack.nativeTrackId == null &&
         audioTrack.formatId == null &&
@@ -1587,6 +1632,14 @@ class BetterPlayerController {
     if (!isDefault) {
       await _refreshNativeAudioTracks();
     }
+
+    _postEvent(BetterPlayerEvent(
+      BetterPlayerEventType.changedAudioTrack,
+      parameters: <String, dynamic>{
+        'from': previousTrack?.language,
+        'to': isDefault ? null : audioTrack.language,
+      },
+    ));
   }
 
   ///Enable or disable audio mixing with other sound within device.

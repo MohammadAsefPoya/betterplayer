@@ -7,6 +7,7 @@ import 'package:better_player/src/configuration/better_player_event_type.dart';
 import 'package:better_player/src/configuration/better_player_network_log.dart';
 import 'package:better_player/src/core/better_player_controller.dart';
 import 'package:better_player/src/core/better_player_utils.dart';
+import 'package:flutter/foundation.dart';
 
 import 'better_player_telemetry_models.dart';
 import 'better_player_telemetry_utils.dart';
@@ -59,6 +60,8 @@ class BetterPlayerTelemetryManager {
   DateTime? _lastPlaybackEventAt;
   double? _suppressNextPausePositionS;
   double? _suppressNextPlayPositionS;
+  String? _currentAudioLanguage;
+  String? _currentSubtitleLanguage;
 
   // Queues for pending observations
   final List<BetterPlayerChunkLoadMetric> _pendingChunkLoads = [];
@@ -85,6 +88,11 @@ class BetterPlayerTelemetryManager {
 
   /// Whether the session start request has succeeded on the server.
   bool get isSessionStartCompleted => _sessionStartCompleted;
+
+  /// Pending playback events queued for transmission.
+  @visibleForTesting
+  List<BetterPlayerPlaybackEventMetric> get pendingPlaybackEvents =>
+      List.unmodifiable(_pendingPlaybackEvents);
 
   /// Stops and clears the current telemetry session.
   /// If [flushPrevious] is true and a session was active, attempts a final upload.
@@ -126,6 +134,8 @@ class BetterPlayerTelemetryManager {
     _lastPlaybackEventAt = null;
     _suppressNextPausePositionS = null;
     _suppressNextPlayPositionS = null;
+    _currentAudioLanguage = null;
+    _currentSubtitleLanguage = null;
     _retryBatch = null;
     _pendingChunkLoads.clear();
     _pendingBufferSamples.clear();
@@ -300,6 +310,33 @@ class BetterPlayerTelemetryManager {
 
       case BetterPlayerEventType.progress:
         _handleProgress(currentPositionS);
+        break;
+
+      case BetterPlayerEventType.changedAudioTrack:
+        final from = event.parameters?['from'] as String?;
+        final to = event.parameters?['to'] as String?;
+        handleAudioLanguageChanged(
+          from: from,
+          to: to,
+          positionS: currentPositionS,
+        );
+        break;
+
+      case BetterPlayerEventType.changedSubtitles:
+        final from = event.parameters?['from'] as String?;
+        final to = event.parameters?['to'] as String?;
+        final isFromNone = event.parameters?['isFromNone'] == true;
+        final isToNone = event.parameters?['isToNone'] == true;
+        if (event.parameters?.containsKey('from') == true ||
+            event.parameters?.containsKey('to') == true) {
+          handleSubtitleChanged(
+            from: from,
+            to: to,
+            isFromNone: isFromNone,
+            isToNone: isToNone,
+            positionS: currentPositionS,
+          );
+        }
         break;
 
       default:
@@ -814,6 +851,67 @@ class BetterPlayerTelemetryManager {
       _lastWatchedPositionS = null;
       _pausedPositionS = null;
     }
+  }
+
+  /// Records an AUDIO_LANGUAGE_CHANGED event in pending playback events.
+  void handleAudioLanguageChanged({
+    String? from,
+    required String? to,
+    double? positionS,
+  }) {
+    if (_configuration?.hasValue != true || _isDisposed) return;
+
+    final effectivePositionS = positionS ?? _getCurrentPositionSeconds();
+    final effectiveFrom = BetterPlayerTelemetryUtils.normalizeAudioLanguageCode(
+      from ?? _currentAudioLanguage,
+    );
+    final effectiveTo =
+        BetterPlayerTelemetryUtils.normalizeAudioLanguageCode(to);
+
+    _currentAudioLanguage = effectiveTo;
+
+    recordPlaybackEvent(
+      type: 'AUDIO_LANGUAGE_CHANGED',
+      positionS: effectivePositionS,
+      details: <String, dynamic>{
+        'from': effectiveFrom,
+        'to': effectiveTo,
+      },
+    );
+  }
+
+  /// Records a SUBTITLE_CHANGED event in pending playback events.
+  void handleSubtitleChanged({
+    String? from,
+    required String? to,
+    bool isFromNone = false,
+    bool isToNone = false,
+    double? positionS,
+  }) {
+    if (_configuration?.hasValue != true || _isDisposed) return;
+
+    final effectivePositionS = positionS ?? _getCurrentPositionSeconds();
+    final effectiveFrom =
+        BetterPlayerTelemetryUtils.normalizeSubtitleLanguageCode(
+      from ?? _currentSubtitleLanguage,
+      isNone: isFromNone,
+    );
+    final effectiveTo =
+        BetterPlayerTelemetryUtils.normalizeSubtitleLanguageCode(
+      to,
+      isNone: isToNone,
+    );
+
+    _currentSubtitleLanguage = effectiveTo;
+
+    recordPlaybackEvent(
+      type: 'SUBTITLE_CHANGED',
+      positionS: effectivePositionS,
+      details: <String, dynamic>{
+        'from': effectiveFrom,
+        'to': effectiveTo,
+      },
+    );
   }
 
   /// Records a playback state change event into the pending queue.

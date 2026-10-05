@@ -152,6 +152,32 @@ void main() {
       );
       expect(sanitized.containsKey('warning'), isTrue);
     });
+
+    test(
+        'cleanFileUrl correctly strips query tokens and fragments, keeping scheme, host, port, and path',
+        () {
+      expect(
+        BetterPlayerTelemetryUtils.cleanFileUrl(
+            'https://cdn.example.com/videos/master.m3u8?token=secret123&expire=99999'),
+        equals('https://cdn.example.com/videos/master.m3u8'),
+      );
+      expect(
+        BetterPlayerTelemetryUtils.cleanFileUrl(
+            'http://127.0.0.1:8080/vod/movie.mp4?auth=xyz#section'),
+        equals('http://127.0.0.1:8080/vod/movie.mp4'),
+      );
+      expect(
+        BetterPlayerTelemetryUtils.cleanFileUrl('https://example.com/stream.mpd'),
+        equals('https://example.com/stream.mpd'),
+      );
+      expect(
+        BetterPlayerTelemetryUtils.cleanFileUrl('https://example.com'),
+        equals('https://example.com'),
+      );
+      expect(BetterPlayerTelemetryUtils.cleanFileUrl(null), isNull);
+      expect(BetterPlayerTelemetryUtils.cleanFileUrl(''), isNull);
+      expect(BetterPlayerTelemetryUtils.cleanFileUrl('   '), isNull);
+    });
   });
 
   group('BetterPlayerTelemetry Models Tests', () {
@@ -283,6 +309,44 @@ void main() {
         startedAt: '2026-09-10T08:00:00.000Z',
       );
       expect(map['os'], equals('Android 14'));
+    });
+
+    test(
+        'BetterPlayerTelemetryData serializes ip and fileUrl (cleaned) to map',
+        () {
+      const data = BetterPlayerTelemetryData(
+        episodeId: 101,
+        ip: '192.168.1.50',
+        fileUrl: 'https://cdn.example.com/video/master.m3u8?token=xyz',
+      );
+      expect(data.hasValue, isTrue);
+
+      final map = data.toMap(
+        sessionId: 'test-session-id',
+        startedAt: '2026-10-05T10:00:00.000Z',
+      );
+
+      expect(map['ip'], equals('192.168.1.50'));
+      expect(map['fileUrl'],
+          equals('https://cdn.example.com/video/master.m3u8'));
+    });
+
+    test(
+        'BetterPlayerTelemetryData omits ip and fileUrl when null, empty, or whitespace',
+        () {
+      const data = BetterPlayerTelemetryData(
+        episodeId: 101,
+        ip: '   ',
+        fileUrl: '',
+      );
+
+      final map = data.toMap(
+        sessionId: 'test-session-id',
+        startedAt: '2026-10-05T10:00:00.000Z',
+      );
+
+      expect(map.containsKey('ip'), isFalse);
+      expect(map.containsKey('fileUrl'), isFalse);
     });
 
     test(
@@ -614,6 +678,72 @@ void main() {
       expect(chunkLoads.first['endS'], equals(6.0));
       expect(chunkLoads.first['bytes'], equals(500000));
       expect(chunkLoads.first['source'], equals('media_1.ts'));
+
+      await controller.telemetryManager.dispose(isFinal: true);
+      controller.dispose(forceDispose: true);
+    });
+
+    test('Session start payload includes ip and cleaned fileUrl', () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        httpClient: client,
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(
+          episodeId: 500,
+          ip: '203.0.113.195',
+          fileUrl: 'https://cdn.example.com/live/master.m3u8?token=abc',
+        ),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      expect(receivedStartRequests.length, equals(1));
+      final startReq = receivedStartRequests.first;
+      expect(startReq['ip'], equals('203.0.113.195'));
+      expect(startReq['fileUrl'],
+          equals('https://cdn.example.com/live/master.m3u8'));
+
+      await controller.telemetryManager.dispose(isFinal: true);
+      controller.dispose(forceDispose: true);
+    });
+
+    test(
+        'BetterPlayerController setupDataSource auto-populates cleaned fileUrl from dataSource.url and passes ip',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final client = HttpClient();
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        httpClient: client,
+      );
+
+      final dataSource = BetterPlayerDataSource.network(
+        'https://stream.example.com/hls/live.m3u8?token=jwt_secure_123',
+        ip: '198.51.100.24',
+        telemetryConfiguration: config,
+      );
+
+      await controller.setupDataSource(dataSource);
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      expect(receivedStartRequests.length, equals(1));
+      final startReq = receivedStartRequests.first;
+      expect(startReq['ip'], equals('198.51.100.24'));
+      expect(startReq['fileUrl'],
+          equals('https://stream.example.com/hls/live.m3u8'));
 
       await controller.telemetryManager.dispose(isFinal: true);
       controller.dispose(forceDispose: true);
@@ -2233,6 +2363,85 @@ void main() {
       expect(startHeader.value('x-null-header'), isNull);
 
       await controller.telemetryManager.dispose(isFinal: false);
+      controller.dispose(forceDispose: true);
+    });
+
+    test(
+        'Uploads AUDIO_LANGUAGE_CHANGED and SUBTITLE_CHANGED events in telemetry batch',
+        () async {
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: mockVideo,
+      );
+
+      final config = BetterPlayerTelemetryConfiguration(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        batchSendInterval: const Duration(milliseconds: 100),
+        httpClient: HttpClient(),
+      );
+
+      controller.telemetryManager.startSession(
+        configuration: config,
+        telemetryData: const BetterPlayerTelemetryData(episodeId: 10),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      final trackFas = BetterPlayerAsmsAudioTrack(
+        id: 1,
+        label: 'Persian',
+        language: 'fas',
+      );
+      final trackHin = BetterPlayerAsmsAudioTrack(
+        id: 2,
+        label: 'Hindi',
+        language: 'hin',
+      );
+
+      await controller.setAudioTrack(trackFas);
+      await controller.setAudioTrack(trackHin);
+
+      final subNone = BetterPlayerSubtitlesSource(
+        type: BetterPlayerSubtitlesSourceType.none,
+      );
+      final subSpa = BetterPlayerSubtitlesSource(
+        type: BetterPlayerSubtitlesSourceType.network,
+        language: 'spa',
+        urls: ['https://example.com/spa.vtt'],
+      );
+
+      // Initial setup with sourceInitialize does not emit
+      await controller.setupSubtitleSource(subNone, sourceInitialize: true);
+
+      // Change to Spanish
+      await controller.setupSubtitleSource(subSpa);
+
+      // Change to None (off)
+      await controller.setupSubtitleSource(subNone);
+
+      // Flush final batches
+      await controller.telemetryManager.dispose(isFinal: true);
+
+      final playbackEvents = allPlaybackEvents();
+
+      final audioEvents = playbackEvents
+          .where((e) => e['type'] == 'AUDIO_LANGUAGE_CHANGED')
+          .toList();
+      expect(audioEvents.length, equals(2));
+      expect(audioEvents[0]['details']['from'], equals('und'));
+      expect(audioEvents[0]['details']['to'], equals('fas'));
+      expect(audioEvents[1]['details']['from'], equals('fas'));
+      expect(audioEvents[1]['details']['to'], equals('hin'));
+
+      final subEvents = playbackEvents
+          .where((e) => e['type'] == 'SUBTITLE_CHANGED')
+          .toList();
+      expect(subEvents.length, equals(2));
+      expect(subEvents[0]['details']['from'], equals('none'));
+      expect(subEvents[0]['details']['to'], equals('spa'));
+      expect(subEvents[1]['details']['from'], equals('spa'));
+      expect(subEvents[1]['details']['to'], equals('none'));
+
       controller.dispose(forceDispose: true);
     });
   });

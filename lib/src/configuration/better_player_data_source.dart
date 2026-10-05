@@ -92,6 +92,12 @@ class BetterPlayerDataSource {
   ///Operating system string for telemetry (defaults to Platform.operatingSystem if omitted)
   final String? os;
 
+  ///User IP address for telemetry session start
+  final String? ip;
+
+  ///Streaming file URL for telemetry session start (scheme + host + path, stripped of query tokens)
+  final String? fileUrl;
+
   BetterPlayerDataSource(
     this.type,
     this.url, {
@@ -120,6 +126,8 @@ class BetterPlayerDataSource {
     this.platform,
     this.deviceType,
     this.os,
+    this.ip,
+    this.fileUrl,
   }) : assert(
             (type == BetterPlayerDataSourceType.network ||
                     type == BetterPlayerDataSourceType.file) ||
@@ -152,6 +160,8 @@ class BetterPlayerDataSource {
     String? platform,
     String? deviceType,
     String? os,
+    String? ip,
+    String? fileUrl,
   }) {
     return BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
@@ -175,6 +185,8 @@ class BetterPlayerDataSource {
       platform: platform,
       deviceType: deviceType,
       os: os,
+      ip: ip,
+      fileUrl: fileUrl,
     );
   }
 
@@ -195,6 +207,8 @@ class BetterPlayerDataSource {
     String? platform,
     String? deviceType,
     String? os,
+    String? ip,
+    String? fileUrl,
   }) {
     return BetterPlayerDataSource(
       BetterPlayerDataSourceType.file,
@@ -213,6 +227,8 @@ class BetterPlayerDataSource {
       platform: platform,
       deviceType: deviceType,
       os: os,
+      ip: ip,
+      fileUrl: fileUrl,
     );
   }
 
@@ -234,6 +250,8 @@ class BetterPlayerDataSource {
     String? platform,
     String? deviceType,
     String? os,
+    String? ip,
+    String? fileUrl,
   }) {
     return BetterPlayerDataSource(
       BetterPlayerDataSourceType.memory,
@@ -254,6 +272,8 @@ class BetterPlayerDataSource {
       platform: platform,
       deviceType: deviceType,
       os: os,
+      ip: ip,
+      fileUrl: fileUrl,
     );
   }
 
@@ -283,6 +303,8 @@ class BetterPlayerDataSource {
     String? platform,
     String? deviceType,
     String? os,
+    String? ip,
+    String? fileUrl,
   }) {
     return BetterPlayerDataSource(
       type ?? this.type,
@@ -311,6 +333,8 @@ class BetterPlayerDataSource {
       platform: platform ?? this.platform,
       deviceType: deviceType ?? this.deviceType,
       os: os ?? this.os,
+      ip: ip ?? this.ip,
+      fileUrl: fileUrl ?? this.fileUrl,
     );
   }
 }

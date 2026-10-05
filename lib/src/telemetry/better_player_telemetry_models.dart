@@ -102,6 +102,12 @@ class BetterPlayerTelemetryData {
   /// Operating system name.
   final String? os;
 
+  /// Client user IP address.
+  final String? ip;
+
+  /// Streaming file URL (scheme + host + path, stripped of query tokens).
+  final String? fileUrl;
+
   /// Additional custom metadata.
   final Map<String, dynamic>? extra;
 
@@ -110,6 +116,8 @@ class BetterPlayerTelemetryData {
     this.platform,
     this.deviceType,
     this.os,
+    this.ip,
+    this.fileUrl,
     this.extra,
   });
 
@@ -119,6 +127,8 @@ class BetterPlayerTelemetryData {
       (platform != null && platform!.trim().isNotEmpty) ||
       (deviceType != null && deviceType!.trim().isNotEmpty) ||
       (os != null && os!.trim().isNotEmpty) ||
+      (ip != null && ip!.trim().isNotEmpty) ||
+      (fileUrl != null && fileUrl!.trim().isNotEmpty) ||
       (extra != null && extra!.isNotEmpty);
 
   Map<String, dynamic> toMap({
@@ -134,6 +144,9 @@ class BetterPlayerTelemetryData {
     final effectiveOs = (os != null && os!.trim().isNotEmpty)
         ? (os!.trim().length > 100 ? os!.trim().substring(0, 100) : os!.trim())
         : BetterPlayerTelemetryUtils.getOperatingSystem();
+    final effectiveIp =
+        (ip != null && ip!.trim().isNotEmpty) ? ip!.trim() : null;
+    final effectiveFileUrl = BetterPlayerTelemetryUtils.cleanFileUrl(fileUrl);
 
     final map = <String, dynamic>{
       'sessionId': sessionId,
@@ -142,6 +155,9 @@ class BetterPlayerTelemetryData {
       'deviceType': effectiveDeviceType,
       if (effectiveOs.isNotEmpty) 'os': effectiveOs,
       'startedAt': startedAt,
+      if (effectiveIp != null) 'ip': effectiveIp,
+      if (effectiveFileUrl != null && effectiveFileUrl.isNotEmpty)
+        'fileUrl': effectiveFileUrl,
     };
 
     if (extra != null && extra!.isNotEmpty) {
@@ -293,7 +309,8 @@ class BetterPlayerPlaybackEventMetric {
 
   /// Type of the event.
   /// Standard types: PLAYBACK_STARTED, PAUSE, RESUME, SEEK, STALL_START,
-  /// STALL_END, QUALITY_SWITCH, ERROR, CDN_SWITCH, ENDED.
+  /// STALL_END, QUALITY_SWITCH, ERROR, CDN_SWITCH, ENDED,
+  /// AUDIO_LANGUAGE_CHANGED, SUBTITLE_CHANGED.
   final String type;
 
   /// Video position in seconds when the event happened.

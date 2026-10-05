@@ -176,4 +176,59 @@ class BetterPlayerTelemetryUtils {
 
     return sanitized;
   }
+
+  /// Normalizes an audio language code.
+  /// If [language] is null, empty, whitespace, or 'none', returns 'und'.
+  static String normalizeAudioLanguageCode(String? language) {
+    if (language == null) return 'und';
+    final trimmed = language.trim().toLowerCase();
+    if (trimmed.isEmpty || trimmed == 'null' || trimmed == 'none') {
+      return 'und';
+    }
+    return trimmed;
+  }
+
+  /// Normalizes a subtitle language code.
+  /// If [isNone] is true or [language] is 'none', returns 'none' (subtitle off).
+  /// If [language] is null, empty, or whitespace, returns 'und'.
+  /// Otherwise returns trimmed lowercase language code.
+  static String normalizeSubtitleLanguageCode(String? language,
+      {bool isNone = false}) {
+    if (isNone) return 'none';
+    if (language == null) return 'und';
+    final trimmed = language.trim().toLowerCase();
+    if (trimmed == 'none') return 'none';
+    if (trimmed.isEmpty || trimmed == 'null') return 'und';
+    return trimmed;
+  }
+
+  /// Cleans a streaming file URL by retaining scheme, host, port (if present), and path,
+  /// stripping query parameters, tokens, and fragment.
+  /// Returns null if [url] is null or empty.
+  static String? cleanFileUrl(String? url) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+
+    try {
+      final uri = Uri.parse(trimmed);
+      if (uri.hasScheme && uri.host.isNotEmpty) {
+        final origin =
+            '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
+        final path = uri.path;
+        return '$origin$path';
+      }
+    } catch (_) {}
+
+    // Fallback: strip query string and fragment manually
+    final questionMarkIdx = trimmed.indexOf('?');
+    var withoutQuery =
+        questionMarkIdx != -1 ? trimmed.substring(0, questionMarkIdx) : trimmed;
+    final hashIdx = withoutQuery.indexOf('#');
+    if (hashIdx != -1) {
+      withoutQuery = withoutQuery.substring(0, hashIdx);
+    }
+    return withoutQuery.isNotEmpty ? withoutQuery : null;
+  }
 }
+

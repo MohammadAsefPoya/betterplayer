@@ -146,9 +146,15 @@ class BetterPlayerHlsUtils {
             Util.checkBitPositionIsSet(rendition.format.selectionFlags!, 1);
       }
 
+      final String? parsedSubLang = rendition.format.language;
+      final String subLang =
+          (parsedSubLang != null && parsedSubLang.trim().isNotEmpty)
+              ? parsedSubLang.trim()
+              : 'und';
+
       return BetterPlayerAsmsSubtitle(
           name: rendition.format.label,
-          language: rendition.format.language,
+          language: subLang,
           url: rendition.url.toString(),
           realUrls: hlsSubtitlesUrls,
           isSegmented: isSegmented,
@@ -169,10 +175,15 @@ class BetterPlayerHlsUtils {
     if (parsedPlaylist is HlsMasterPlaylist) {
       for (int index = 0; index < parsedPlaylist.audios.length; index++) {
         final Rendition audio = parsedPlaylist.audios[index];
+        final String? parsedAudioLang = audio.format.language;
+        final String audioLang =
+            (parsedAudioLang != null && parsedAudioLang.trim().isNotEmpty)
+                ? parsedAudioLang.trim()
+                : 'und';
         audios.add(BetterPlayerAsmsAudioTrack(
           id: index,
           label: audio.name,
-          language: audio.format.language,
+          language: audioLang,
           url: audio.url.toString(),
           formatId: audio.format.id,
         ));
