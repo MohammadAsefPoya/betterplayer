@@ -216,6 +216,12 @@ class BetterPlayerTelemetryManager {
     );
 
     try {
+      final jsonBody = jsonEncode(payload);
+      BetterPlayerUtils.log(
+        'Telemetry session start POST $targetUri '
+        'query parameters: ${jsonEncode(targetUri.queryParametersAll)} '
+        'body: $jsonBody',
+      );
       final client = config.httpClient ?? _httpClient;
       final request = await client.postUrl(targetUri);
       request.headers.contentType = ContentType.json;
@@ -226,20 +232,25 @@ class BetterPlayerTelemetryManager {
         }
       });
 
-      final jsonBytes = utf8.encode(jsonEncode(payload));
+      final jsonBytes = utf8.encode(jsonBody);
       request.contentLength = jsonBytes.length;
       request.add(jsonBytes);
 
       final response = await request.close();
+      final responseBody = await response
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
+      BetterPlayerUtils.log(
+        'Telemetry session start response POST $targetUri '
+        'status: ${response.statusCode} body: $responseBody',
+      );
       if (response.statusCode >= 200 && response.statusCode < 300) {
         _sessionStartCompleted = true;
         _sessionStartRetryTimer?.cancel();
         _sessionStartRetryDelay = const Duration(seconds: 2);
-        await response.drain<void>();
       } else {
-        final errorBody = await response.transform(utf8.decoder).join();
         BetterPlayerUtils.log(
-          'Telemetry session start rejected with status ${response.statusCode}: $errorBody',
+          'Telemetry session start rejected with status ${response.statusCode}: $responseBody',
         );
         if (response.statusCode == 400 || response.statusCode == 409) {
           _sessionStartRetryTimer?.cancel();
@@ -1153,28 +1164,39 @@ class BetterPlayerTelemetryManager {
     if (targetUri == null) return false;
 
     try {
+      final jsonBody = jsonEncode(batch.toMap());
+      BetterPlayerUtils.log(
+        'Telemetry batch POST $targetUri '
+        'query parameters: ${jsonEncode(targetUri.queryParametersAll)} '
+        'body: $jsonBody',
+      );
       final client = config.httpClient ?? _httpClient;
       final request = await client.postUrl(targetUri);
       request.headers.contentType = ContentType.json;
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
 
-      final jsonBytes = utf8.encode(jsonEncode(batch.toMap()));
+      final jsonBytes = utf8.encode(jsonBody);
       request.contentLength = jsonBytes.length;
       request.add(jsonBytes);
 
       final response = await request.close();
       final statusCode = response.statusCode;
+      final responseBody = await response
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .join();
+      BetterPlayerUtils.log(
+        'Telemetry batch response POST $targetUri '
+        'status: $statusCode body: $responseBody',
+      );
 
       if (statusCode >= 200 && statusCode < 300) {
-        await response.drain<void>();
         return true;
       }
 
-      final errorBody = await response.transform(utf8.decoder).join();
       if (statusCode == 404) {
         // Session not found on backend! Re-dispatch session start then retry
         BetterPlayerUtils.log(
-          'Telemetry batch 404: Session not found ($errorBody), re-registering session',
+          'Telemetry batch 404: Session not found ($responseBody), re-registering session',
         );
         _sessionStartCompleted = false;
         _dispatchSessionStart();
@@ -1182,12 +1204,12 @@ class BetterPlayerTelemetryManager {
       } else if (statusCode == 400) {
         // Bad request - check fields, don't endlessly retry same invalid batch
         BetterPlayerUtils.log(
-          'Telemetry batch rejected with HTTP 400: $errorBody (payload: $batch)',
+          'Telemetry batch rejected with HTTP 400: $responseBody (payload: $batch)',
         );
         return true; // Discard invalid batch
       } else {
         BetterPlayerUtils.log(
-          'Telemetry batch upload failed with status $statusCode: $errorBody',
+          'Telemetry batch upload failed with status $statusCode: $responseBody',
         );
         return false;
       }
