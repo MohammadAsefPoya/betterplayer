@@ -237,9 +237,7 @@ class BetterPlayerTelemetryManager {
       request.add(jsonBytes);
 
       final response = await request.close();
-      final responseBody = await response
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .join();
+      final responseBody = await response.transform(const Utf8Decoder()).join();
       BetterPlayerUtils.log(
         'Telemetry session start response POST $targetUri '
         'status: ${response.statusCode} body: $responseBody',
@@ -1181,9 +1179,7 @@ class BetterPlayerTelemetryManager {
 
       final response = await request.close();
       final statusCode = response.statusCode;
-      final responseBody = await response
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .join();
+      final responseBody = await response.transform(const Utf8Decoder()).join();
       BetterPlayerUtils.log(
         'Telemetry batch response POST $targetUri '
         'status: $statusCode body: $responseBody',
