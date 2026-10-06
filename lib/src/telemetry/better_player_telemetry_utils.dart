@@ -13,6 +13,7 @@ class BetterPlayerTelemetryUtils {
     'ANDROID',
     'IOS',
     'ANDROID_TV',
+    'STB',
     'OLD_WEB_TV',
   };
 
@@ -231,4 +232,3 @@ class BetterPlayerTelemetryUtils {
     return withoutQuery.isNotEmpty ? withoutQuery : null;
   }
 }
-

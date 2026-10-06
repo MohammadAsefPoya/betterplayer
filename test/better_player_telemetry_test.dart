@@ -64,6 +64,9 @@ void main() {
           equals('ANDROID_TV'));
       expect(BetterPlayerTelemetryUtils.normalizePlatform('old_web_tv'),
           equals('OLD_WEB_TV'));
+      expect(BetterPlayerTelemetryUtils.normalizePlatform('STB'), equals('STB'));
+      expect(
+          BetterPlayerTelemetryUtils.normalizePlatform(' stb '), equals('STB'));
 
       // Invalid/empty fallback
       final defaultPlatform =
@@ -245,6 +248,21 @@ void main() {
       expect(map['deviceType'], equals('MOBILE')); // uppercase enum
       expect(map['os'], equals('Android 14'));
       expect(map['startedAt'], equals('2026-09-10T08:00:00.000Z'));
+    });
+
+    test('BetterPlayerTelemetryData preserves STB platform in session payload',
+        () {
+      const data = BetterPlayerTelemetryData(
+        platform: 'STB',
+        deviceType: 'TV',
+      );
+      final map = data.toMap(
+        sessionId: 'test-session-id',
+        startedAt: '2026-09-10T08:00:00.000Z',
+      );
+
+      expect(map['platform'], equals('STB'));
+      expect(map['deviceType'], equals('TV'));
     });
 
     test('BetterPlayerTelemetryData strips userId and profileId from JSON body',
