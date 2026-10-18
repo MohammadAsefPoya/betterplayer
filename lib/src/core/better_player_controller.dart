@@ -17,6 +17,7 @@ class BetterPlayerController {
   static const String _durationParameter = "duration";
   static const String _fromDurationParameter = "fromDuration";
   static const String _progressParameter = "progress";
+  static const String _originParameter = "origin";
   static const String _bufferedParameter = "buffered";
   static const String _volumeParameter = "volume";
   static const String _speedParameter = "speed";
@@ -156,6 +157,9 @@ class BetterPlayerController {
 
   ///Current app lifecycle state.
   AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
+
+  ///Last error state posted as an exception event, to mark repeats.
+  String? _lastPostedErrorKey;
 
   ///Flag which determines if controls (UI interface) is shown. When false,
   ///UI won't be shown (show only player surface).
@@ -311,7 +315,8 @@ class BetterPlayerController {
           betterPlayerDataSource.fileUrl ??
           BetterPlayerTelemetryUtils.cleanFileUrl(betterPlayerDataSource.url);
 
-      _telemetryManager.startSession(
+      // Arms the session; it begins on the first play request.
+      _telemetryManager.prepareSession(
         configuration: effectiveTelemetryConfig,
         telemetryData: BetterPlayerTelemetryData(
           episodeId: episodeId ?? betterPlayerDataSource.episodeId,
@@ -323,7 +328,7 @@ class BetterPlayerController {
         ),
       );
     } else {
-      _telemetryManager.stopSession();
+      _telemetryManager.prepareSession();
     }
     return _setupDataSourceWithConfiguration(betterPlayerDataSource);
   }
@@ -835,12 +840,12 @@ class BetterPlayerController {
       if (_isAutomaticPlayPauseHandled()) {
         if (_appLifecycleState == AppLifecycleState.resumed &&
             _isPlayerVisible) {
-          await play();
+          await play(origin: BetterPlayerPlaybackOrigin.system);
         } else {
           _wasPlayingBeforePause = true;
         }
       } else {
-        await play();
+        await play(origin: BetterPlayerPlaybackOrigin.system);
       }
     } else {
       if (fullScreenByDefault) {
@@ -885,18 +890,24 @@ class BetterPlayerController {
   }
 
   ///Start video playback. Play will be triggered only if current lifecycle state
-  ///is resumed.
-  Future<void> play() async {
+  ///is resumed. Pass [origin] [BetterPlayerPlaybackOrigin.system] when the app
+  ///starts playback on its own (after an ad or a dialog, autoplay), so
+  ///telemetry does not report it as a viewer action.
+  Future<void> play({
+    BetterPlayerPlaybackOrigin origin = BetterPlayerPlaybackOrigin.user,
+  }) async {
     if (videoPlayerController == null) {
       throw StateError("The data source has not been initialized");
     }
 
     _requestedPlayState = true;
     if (_appLifecycleState == AppLifecycleState.resumed) {
+      _telemetryManager.notifyPlayRequested(origin: origin);
       await videoPlayerController!.play();
       _hasCurrentDataSourceStarted = true;
       _wasPlayingBeforePause = null;
-      _postEvent(BetterPlayerEvent(BetterPlayerEventType.play));
+      _postEvent(BetterPlayerEvent(BetterPlayerEventType.play,
+          parameters: <String, dynamic>{_originParameter: origin}));
       _postControllerEvent(BetterPlayerControllerEvent.play);
     }
   }
@@ -910,15 +921,21 @@ class BetterPlayerController {
     await videoPlayerController!.setLooping(looping);
   }
 
-  ///Stop video playback.
-  Future<void> pause() async {
+  ///Stop video playback. Pass [origin] [BetterPlayerPlaybackOrigin.system]
+  ///when the app pauses on its own (ads, dialogs, episode change), so
+  ///telemetry does not report it as a viewer pause.
+  Future<void> pause({
+    BetterPlayerPlaybackOrigin origin = BetterPlayerPlaybackOrigin.user,
+  }) async {
     if (videoPlayerController == null) {
       throw StateError("The data source has not been initialized");
     }
 
     _requestedPlayState = false;
+    _telemetryManager.notifyPauseRequested(origin: origin);
     await videoPlayerController!.pause();
-    _postEvent(BetterPlayerEvent(BetterPlayerEventType.pause));
+    _postEvent(BetterPlayerEvent(BetterPlayerEventType.pause,
+        parameters: <String, dynamic>{_originParameter: origin}));
   }
 
   ///Move player to specific position/moment of the video.
@@ -1053,15 +1070,27 @@ class BetterPlayerController {
 
     if (currentVideoPlayerValue.hasError) {
       _videoPlayerValueOnError ??= currentVideoPlayerValue;
+      final errorDetails = videoPlayerController?.errorDetails;
+      final errorKey =
+          '${currentVideoPlayerValue.errorDescription}|$errorDetails';
+      final isRepeat = errorKey == _lastPostedErrorKey;
+      _lastPostedErrorKey = errorKey;
       _postEvent(
         BetterPlayerEvent(
           BetterPlayerEventType.exception,
           parameters: <String, dynamic>{
-            "exception": currentVideoPlayerValue.errorDescription
+            "exception": currentVideoPlayerValue.errorDescription,
+            if (errorDetails is Map) "errorDetails": errorDetails,
+            // The listener reports the same error state on every value
+            // change; only the first report is a new error occurrence.
+            "isRepeat": isRepeat,
           },
         ),
       );
+    } else {
+      _lastPostedErrorKey = null;
     }
+    _telemetryManager.handlePositionTick();
     if (currentVideoPlayerValue.initialized &&
         !_hasCurrentDataSourceInitialized) {
       _hasCurrentDataSourceInitialized = true;
@@ -1238,10 +1267,10 @@ class BetterPlayerController {
       } else {
         if (visibilityFraction == 0) {
           _wasPlayingBeforePause ??= isPlaying();
-          pause();
+          pause(origin: BetterPlayerPlaybackOrigin.system);
         } else {
           if (_wasPlayingBeforePause == true && !isPlaying()!) {
-            play();
+            play(origin: BetterPlayerPlaybackOrigin.system);
           }
         }
       }
@@ -1255,11 +1284,11 @@ class BetterPlayerController {
     }
     final position = await videoPlayerController!.position;
     final wasPlayingBeforeChange = isPlaying()!;
-    pause();
+    pause(origin: BetterPlayerPlaybackOrigin.system);
     await setupDataSource(betterPlayerDataSource!.copyWith(url: url));
     seekTo(position!);
     if (wasPlayingBeforeChange) {
-      play();
+      play(origin: BetterPlayerPlaybackOrigin.system);
     }
 
     // Get current video size (width & height)
@@ -1321,11 +1350,15 @@ class BetterPlayerController {
   ///state, then video playback will stop. If showNotification is set in data
   ///source or handleLifecycle is false then this logic will be ignored.
   void setAppLifecycleState(AppLifecycleState appLifecycleState) {
+    if (appLifecycleState == AppLifecycleState.paused) {
+      // Going to the background is a normal flush, not the end of a session.
+      _telemetryManager.flush();
+    }
     if (_isAutomaticPlayPauseHandled()) {
       _appLifecycleState = appLifecycleState;
       if (appLifecycleState == AppLifecycleState.resumed) {
         if (_wasPlayingBeforePause == true && _isPlayerVisible) {
-          play();
+          play(origin: BetterPlayerPlaybackOrigin.system);
         }
       }
       if (appLifecycleState == AppLifecycleState.paused) {
@@ -1333,7 +1366,7 @@ class BetterPlayerController {
           return;
         }
         _wasPlayingBeforePause ??= isPlaying();
-        pause();
+        pause(origin: BetterPlayerPlaybackOrigin.system);
       }
     }
   }
@@ -1450,7 +1483,12 @@ class BetterPlayerController {
           videoPlayerController!.value =
               videoPlayerController!.value.copyWith(isPlaying: true);
         }
-        _postEvent(BetterPlayerEvent(BetterPlayerEventType.play));
+        _telemetryManager.notifyPlayRequested(
+            origin: BetterPlayerPlaybackOrigin.native);
+        _postEvent(BetterPlayerEvent(BetterPlayerEventType.play,
+            parameters: <String, dynamic>{
+              _originParameter: BetterPlayerPlaybackOrigin.native
+            }));
         break;
       case VideoEventType.pause:
         _requestedPlayState = false;
@@ -1459,7 +1497,10 @@ class BetterPlayerController {
           videoPlayerController!.value =
               videoPlayerController!.value.copyWith(isPlaying: false);
         }
-        _postEvent(BetterPlayerEvent(BetterPlayerEventType.pause));
+        _postEvent(BetterPlayerEvent(BetterPlayerEventType.pause,
+            parameters: <String, dynamic>{
+              _originParameter: BetterPlayerPlaybackOrigin.native
+            }));
         break;
       case VideoEventType.seek:
         _postEvent(
@@ -1571,9 +1612,9 @@ class BetterPlayerController {
       await _setupDataSourceWithConfiguration(dataSource, recovering: true);
       await seekTo(position);
       if (shouldPlay) {
-        await play();
+        await play(origin: BetterPlayerPlaybackOrigin.system);
       } else {
-        await pause();
+        await pause(origin: BetterPlayerPlaybackOrigin.system);
       }
       final duration = videoPlayerController!.value.duration;
       final expectedPosition = duration == null
@@ -1733,7 +1774,7 @@ class BetterPlayerController {
       }
       _asmsSegmentRetryTimers.clear();
       if (videoPlayerController != null) {
-        pause();
+        pause(origin: BetterPlayerPlaybackOrigin.system);
         videoPlayerController!.removeListener(_onFullScreenStateChanged);
         videoPlayerController!.removeListener(_onVideoPlayerChanged);
         videoPlayerController!.dispose();

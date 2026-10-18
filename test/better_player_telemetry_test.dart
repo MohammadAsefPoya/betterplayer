@@ -330,7 +330,7 @@ void main() {
     });
 
     test(
-        'BetterPlayerTelemetryData serializes ip and fileUrl (cleaned) to map',
+        'BetterPlayerTelemetryData never serializes ip and cleans fileUrl',
         () {
       const data = BetterPlayerTelemetryData(
         episodeId: 101,
@@ -344,7 +344,8 @@ void main() {
         startedAt: '2026-10-05T10:00:00.000Z',
       );
 
-      expect(map['ip'], equals('192.168.1.50'));
+      // The gateway adds the IP itself.
+      expect(map.containsKey('ip'), isFalse);
       expect(map['fileUrl'],
           equals('https://cdn.example.com/video/master.m3u8'));
     });
@@ -701,7 +702,7 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
-    test('Session start payload includes ip and cleaned fileUrl', () async {
+    test('Session start payload omits ip and cleans fileUrl', () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
         controller: mockVideo,
@@ -726,7 +727,7 @@ void main() {
 
       expect(receivedStartRequests.length, equals(1));
       final startReq = receivedStartRequests.first;
-      expect(startReq['ip'], equals('203.0.113.195'));
+      expect(startReq.containsKey('ip'), isFalse);
       expect(startReq['fileUrl'],
           equals('https://cdn.example.com/live/master.m3u8'));
 
@@ -735,7 +736,7 @@ void main() {
     });
 
     test(
-        'BetterPlayerController setupDataSource auto-populates cleaned fileUrl from dataSource.url and passes ip',
+        'BetterPlayerController setupDataSource arms the session and play starts it with the cleaned fileUrl',
         () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
@@ -757,9 +758,16 @@ void main() {
       await controller.setupDataSource(dataSource);
       await Future.delayed(const Duration(milliseconds: 150));
 
+      // Preparing the source sends nothing; the session begins on play.
+      expect(receivedStartRequests, isEmpty);
+      expect(controller.telemetryManager.isSessionArmed, isTrue);
+
+      await controller.play();
+      await Future.delayed(const Duration(milliseconds: 150));
+
       expect(receivedStartRequests.length, equals(1));
       final startReq = receivedStartRequests.first;
-      expect(startReq['ip'], equals('198.51.100.24'));
+      expect(startReq.containsKey('ip'), isFalse);
       expect(startReq['fileUrl'],
           equals('https://stream.example.com/hls/live.m3u8'));
 
@@ -874,7 +882,7 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
-    test('Final telemetry sends a single final batch containing queued events',
+    test('Final telemetry splits queued events by the batch limit and only the last batch is final',
         () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
@@ -911,11 +919,12 @@ void main() {
 
       await controller.telemetryManager.dispose(isFinal: true);
 
-      expect(receivedBatchRequests.length, equals(1));
-      expect(receivedBatchRequests.first['isFinal'], isTrue);
+      expect(receivedBatchRequests.length, equals(3));
+      expect(receivedBatchRequests.map((b) => b['isFinal']).toList(),
+          equals(<bool>[false, false, true]));
       expect(
-        receivedBatchRequests.first['playbackEvents'],
-        hasLength(3),
+        receivedBatchRequests.map((b) => (b['playbackEvents'] as List).length),
+        everyElement(equals(1)),
       );
 
       controller.dispose(forceDispose: true);
@@ -957,6 +966,7 @@ void main() {
         telemetryConfiguration: config,
       );
       await controller.setupDataSource(ds2);
+      await controller.play();
       final session2Id = controller.sessionId;
 
       await Future.delayed(const Duration(milliseconds: 150));
@@ -1000,6 +1010,7 @@ void main() {
         telemetryConfiguration: config,
       );
       await controller.setupDataSource(ds4);
+      await controller.play();
       final session4Id = controller.sessionId;
 
       await Future.delayed(const Duration(milliseconds: 150));
@@ -1252,12 +1263,12 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       // Simulate first frame progress (0.0s -> 5.0s)
+      await mockVideo.play();
       controller.telemetryManager.handlePlayerEvent(
         BetterPlayerEvent(BetterPlayerEventType.play),
       );
-      controller.telemetryManager.handlePlayerEvent(
-        BetterPlayerEvent(BetterPlayerEventType.progress),
-      );
+      await progressAt(controller, mockVideo, 0);
+      await progressAt(controller, mockVideo, 5);
 
       // Wait for first batch containing active range snapshot
       await Future.delayed(const Duration(milliseconds: 250));
@@ -1654,6 +1665,8 @@ void main() {
       controller.telemetryManager.handlePlayerEvent(
         BetterPlayerEvent(BetterPlayerEventType.progress),
       );
+      // The position advances: first frame.
+      await progressAt(controller, mockVideo, 1);
 
       await mockVideo.pause();
       controller.telemetryManager.handlePlayerEvent(
@@ -1722,6 +1735,8 @@ void main() {
       controller.telemetryManager.handlePlayerEvent(
         BetterPlayerEvent(BetterPlayerEventType.progress),
       );
+      // The position advances: first frame.
+      await progressAt(controller, mockVideo, 1);
 
       for (int i = 0; i < 2; i++) {
         await mockVideo.pause();
@@ -1776,6 +1791,11 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 100));
 
+      // First frame before any rendition is known.
+      await mockVideo.play();
+      await progressAt(controller, mockVideo, 0);
+      await progressAt(controller, mockVideo, 1);
+
       controller.telemetryManager.handleNetworkLog(
         completedMediaChunkLog(
           id: 'chunk-720-a',
@@ -1803,7 +1823,7 @@ void main() {
           .where((event) => event['type'] == 'QUALITY_SWITCH')
           .toList();
       expect(qualityEvents.length, equals(1));
-      expect(qualityEvents.single['details']['fromLevel'], equals(0));
+      expect(qualityEvents.single['details']['fromLevel'], isNull);
       expect(qualityEvents.single['details']['toLevel'], equals(2));
       expect(qualityEvents.single['details']['bitrate'], equals(2500000));
       expect(qualityEvents.single['details']['width'], equals(1280));
@@ -1843,6 +1863,11 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 100));
 
+      // First frame before any rendition is known.
+      await mockVideo.play();
+      await progressAt(controller, mockVideo, 0);
+      await progressAt(controller, mockVideo, 1);
+
       controller.telemetryManager.handleNetworkLog(
         completedMediaChunkLog(
           id: 'chunk-240',
@@ -1870,7 +1895,7 @@ void main() {
           .where((event) => event['type'] == 'QUALITY_SWITCH')
           .toList();
       expect(qualityEvents.length, equals(2));
-      expect(qualityEvents.first['details']['fromLevel'], equals(0));
+      expect(qualityEvents.first['details']['fromLevel'], isNull);
       expect(qualityEvents.first['details']['toLevel'], equals(1));
       expect(qualityEvents.last['details']['fromLevel'], equals(1));
       expect(qualityEvents.last['details']['toLevel'], equals(2));
@@ -1912,6 +1937,11 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 100));
 
+      // First frame before any rendition is known.
+      await mockVideo.play();
+      await progressAt(controller, mockVideo, 0);
+      await progressAt(controller, mockVideo, 1);
+
       controller.telemetryManager.handleNetworkLog(
         completedMediaChunkLog(
           id: 'chunk-720',
@@ -1948,7 +1978,7 @@ void main() {
           .where((event) => event['type'] == 'QUALITY_SWITCH')
           .toList();
       expect(qualityEvents.length, equals(1));
-      expect(qualityEvents.single['details']['fromLevel'], equals(0));
+      expect(qualityEvents.single['details']['fromLevel'], isNull);
       expect(qualityEvents.single['details']['toLevel'], equals(1));
 
       controller.dispose(forceDispose: true);
@@ -2100,7 +2130,7 @@ void main() {
           .where((event) => event['type'] == 'SEEK')
           .toList();
       expect(seekEvents.length, equals(1));
-      expect(seekEvents.single['positionS'], equals(10.0));
+      expect(seekEvents.single['positionS'], equals(30.0));
       expect(seekEvents.single['details']['fromS'], equals(10.0));
       expect(seekEvents.single['details']['toS'], equals(30.0));
 
@@ -2162,7 +2192,7 @@ void main() {
           .where((event) => event['type'] == 'SEEK')
           .toList();
       expect(seekEvents.length, equals(1));
-      expect(seekEvents.single['positionS'], equals(24.0));
+      expect(seekEvents.single['positionS'], equals(45.0));
       expect(seekEvents.single['details']['fromS'], equals(24.0));
       expect(seekEvents.single['details']['toS'], equals(45.0));
 
@@ -2253,7 +2283,7 @@ void main() {
           .where((event) => event['type'] == 'SEEK')
           .toList();
       expect(seekEvents.length, equals(1));
-      expect(seekEvents.single['positionS'], equals(35.0));
+      expect(seekEvents.single['positionS'], equals(51.0));
       expect(seekEvents.single['details']['fromS'], equals(35.0));
       expect(seekEvents.single['details']['toS'], equals(51.0));
 
@@ -2405,6 +2435,11 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 150));
 
+      // First frame: the starting audio and subtitle are reported from none.
+      await mockVideo.play();
+      await progressAt(controller, mockVideo, 0);
+      await progressAt(controller, mockVideo, 1);
+
       final trackFas = BetterPlayerAsmsAudioTrack(
         id: 1,
         label: 'Persian',
@@ -2445,20 +2480,17 @@ void main() {
       final audioEvents = playbackEvents
           .where((e) => e['type'] == 'AUDIO_LANGUAGE_CHANGED')
           .toList();
-      expect(audioEvents.length, equals(2));
-      expect(audioEvents[0]['details']['from'], equals('und'));
-      expect(audioEvents[0]['details']['to'], equals('fas'));
-      expect(audioEvents[1]['details']['from'], equals('fas'));
-      expect(audioEvents[1]['details']['to'], equals('hin'));
+      expect(
+          audioEvents.map((e) => '${e['details']['from']}>${e['details']['to']}'),
+          equals(<String>['none>und', 'und>fas', 'fas>hin']));
 
       final subEvents = playbackEvents
           .where((e) => e['type'] == 'SUBTITLE_CHANGED')
           .toList();
-      expect(subEvents.length, equals(2));
-      expect(subEvents[0]['details']['from'], equals('none'));
-      expect(subEvents[0]['details']['to'], equals('spa'));
-      expect(subEvents[1]['details']['from'], equals('spa'));
-      expect(subEvents[1]['details']['to'], equals('none'));
+      // none -> none at start is the only allowed from == to.
+      expect(
+          subEvents.map((e) => '${e['details']['from']}>${e['details']['to']}'),
+          equals(<String>['none>none', 'none>spa', 'spa>none']));
 
       controller.dispose(forceDispose: true);
     });

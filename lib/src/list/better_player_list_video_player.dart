@@ -90,11 +90,11 @@ class _BetterPlayerListVideoPlayerState
     final bool? initialized = _betterPlayerController!.isVideoInitialized();
     if (visibleFraction >= widget.playFraction) {
       if (widget.autoPlay && initialized! && !isPlaying! && !_isDisposing) {
-        _betterPlayerController!.play();
+        _betterPlayerController!.play(origin: BetterPlayerPlaybackOrigin.system);
       }
     } else {
       if (widget.autoPause && initialized! && isPlaying! && !_isDisposing) {
-        _betterPlayerController!.pause();
+        _betterPlayerController!.pause(origin: BetterPlayerPlaybackOrigin.system);
       }
     }
   }

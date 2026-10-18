@@ -60,7 +60,7 @@ class BetterPlayerPlaylistController {
   /// Setup new data source list. Pauses currently played video and init new data
   /// source list. Previous data source list will be removed.
   void setupDataSourceList(List<BetterPlayerDataSource> dataSourceList) {
-    _betterPlayerController?.pause();
+    _betterPlayerController?.pause(origin: BetterPlayerPlaybackOrigin.system);
     _betterPlayerDataSourceList.clear();
     _betterPlayerDataSourceList.addAll(dataSourceList);
     _setup();

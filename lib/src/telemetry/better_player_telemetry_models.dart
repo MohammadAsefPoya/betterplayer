@@ -44,6 +44,15 @@ class BetterPlayerTelemetryConfiguration {
   /// Optional custom HttpClient to use for telemetry requests.
   final HttpClient? httpClient;
 
+  /// A repeated error with the same code is reported at most once per this
+  /// interval; the suppressed repeats are added to the next event's `count`.
+  /// Defaults to 30 seconds.
+  final Duration errorRepeatInterval;
+
+  /// A batch that could not be delivered is dropped once it is older than
+  /// this. Defaults to 24 hours.
+  final Duration maxBatchAge;
+
   const BetterPlayerTelemetryConfiguration({
     this.baseUrl,
     this.startSessionPath = 'v1/statistics/sessions/start',
@@ -58,6 +67,8 @@ class BetterPlayerTelemetryConfiguration {
     this.maxEventDetailsBytes = 8192,
     this.enabled = true,
     this.httpClient,
+    this.errorRepeatInterval = const Duration(seconds: 30),
+    this.maxBatchAge = const Duration(hours: 24),
   });
 
   /// Whether this configuration has a valid baseUrl and is enabled.
@@ -102,8 +113,13 @@ class BetterPlayerTelemetryData {
   /// Operating system name.
   final String? os;
 
-  /// Client user IP address.
+  /// Client user IP address. Kept for API compatibility only: it is never
+  /// sent, the gateway adds the IP itself.
   final String? ip;
+
+  /// "<manufacturer> <model>" of the device (max 100 characters). Filled in
+  /// automatically on Android when not provided.
+  final String? deviceModel;
 
   /// Streaming file URL (scheme + host + path, stripped of query tokens).
   final String? fileUrl;
@@ -118,8 +134,26 @@ class BetterPlayerTelemetryData {
     this.os,
     this.ip,
     this.fileUrl,
+    this.deviceModel,
     this.extra,
   });
+
+  BetterPlayerTelemetryData copyWith({
+    String? os,
+    String? deviceModel,
+    String? fileUrl,
+  }) {
+    return BetterPlayerTelemetryData(
+      episodeId: episodeId,
+      platform: platform,
+      deviceType: deviceType,
+      os: os ?? this.os,
+      ip: ip,
+      fileUrl: fileUrl ?? this.fileUrl,
+      deviceModel: deviceModel ?? this.deviceModel,
+      extra: extra,
+    );
+  }
 
   /// Whether any metadata property is populated with a value.
   bool get hasValue =>
@@ -129,6 +163,7 @@ class BetterPlayerTelemetryData {
       (os != null && os!.trim().isNotEmpty) ||
       (ip != null && ip!.trim().isNotEmpty) ||
       (fileUrl != null && fileUrl!.trim().isNotEmpty) ||
+      (deviceModel != null && deviceModel!.trim().isNotEmpty) ||
       (extra != null && extra!.isNotEmpty);
 
   Map<String, dynamic> toMap({
@@ -141,12 +176,12 @@ class BetterPlayerTelemetryData {
         BetterPlayerTelemetryUtils.normalizePlatform(platform);
     final effectiveDeviceType =
         BetterPlayerTelemetryUtils.normalizeDeviceType(deviceType);
-    final effectiveOs = (os != null && os!.trim().isNotEmpty)
-        ? (os!.trim().length > 100 ? os!.trim().substring(0, 100) : os!.trim())
+    final normalizedOs = BetterPlayerTelemetryUtils.normalizeOs(os);
+    final effectiveOs = normalizedOs.isNotEmpty
+        ? BetterPlayerTelemetryUtils.clamp(normalizedOs, 100)
         : BetterPlayerTelemetryUtils.getOperatingSystem();
-    final effectiveIp =
-        (ip != null && ip!.trim().isNotEmpty) ? ip!.trim() : null;
     final effectiveFileUrl = BetterPlayerTelemetryUtils.cleanFileUrl(fileUrl);
+    final effectiveDeviceModel = deviceModel?.trim();
 
     final map = <String, dynamic>{
       'sessionId': sessionId,
@@ -155,19 +190,25 @@ class BetterPlayerTelemetryData {
       'deviceType': effectiveDeviceType,
       if (effectiveOs.isNotEmpty) 'os': effectiveOs,
       'startedAt': startedAt,
-      if (effectiveIp != null) 'ip': effectiveIp,
       if (effectiveFileUrl != null && effectiveFileUrl.isNotEmpty)
         'fileUrl': effectiveFileUrl,
+      if (effectiveDeviceModel != null && effectiveDeviceModel.isNotEmpty)
+        'deviceModel':
+            BetterPlayerTelemetryUtils.clamp(effectiveDeviceModel, 100),
     };
 
     if (extra != null && extra!.isNotEmpty) {
       for (final entry in extra!.entries) {
         final keyLower = entry.key.toLowerCase();
-        // Do not send userId or profileId in the JSON body per guide
+        // Do not send userId, profileId, accountId or ip in the JSON body:
+        // the gateway adds them.
         if (keyLower == 'userid' ||
             keyLower == 'profileid' ||
             keyLower == 'user_id' ||
-            keyLower == 'profile_id') {
+            keyLower == 'profile_id' ||
+            keyLower == 'accountid' ||
+            keyLower == 'account_id' ||
+            keyLower == 'ip') {
           continue;
         }
         map[entry.key] = entry.value;

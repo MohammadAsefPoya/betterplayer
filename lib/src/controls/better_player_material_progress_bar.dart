@@ -101,7 +101,7 @@ class _VideoProgressBarState
         }
 
         if (_controllerWasPlaying) {
-          betterPlayerController?.play();
+          betterPlayerController?.play(origin: BetterPlayerPlaybackOrigin.system);
           shouldPlayAfterDragEnd = true;
         }
         _setupUpdateBlockTimer();
@@ -179,7 +179,7 @@ class _VideoProgressBarState
   void onFinishedLastSeek() {
     if (shouldPlayAfterDragEnd) {
       shouldPlayAfterDragEnd = false;
-      betterPlayerController?.play();
+      betterPlayerController?.play(origin: BetterPlayerPlaybackOrigin.system);
     }
   }
 }

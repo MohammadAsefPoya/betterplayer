@@ -123,6 +123,7 @@ internal class BetterPlayer(
     private var bufferingTimeoutHandler: Handler? = null
     private var bufferingTimeoutRunnable: Runnable? = null
     private var hasSentBufferingStallError = false
+    private var playbackErrorSequence = 0
     private var selectedTrackWidth = 0
     private var selectedTrackHeight = 0
     private var selectedTrackBitrate = 0
@@ -725,7 +726,8 @@ internal class BetterPlayer(
                 if (shouldRecoverFromBehindLiveWindow(error) && recoverFromBehindLiveWindow()) {
                     return
                 }
-                if (shouldRecoverFromConnectivityLoss(error)) {
+                val recovering = shouldRecoverFromConnectivityLoss(error)
+                if (recovering) {
                     val currentPos = exoPlayer?.currentPosition ?: 0L
                     if (currentPos > 0L && (!pendingRecoverableNetworkError || lastKnownPlaybackPositionMs <= 0L)) {
                         lastKnownPlaybackPositionMs = currentPos
@@ -736,7 +738,11 @@ internal class BetterPlayer(
                     hasSentBufferingStallError = true
                     startRecoverableErrorRecoveryLoop()
                 }
-                eventSink.error("VideoError", "Video player had error $error", "")
+                eventSink.error(
+                    "VideoError",
+                    "Video player had error $error",
+                    buildPlaybackErrorDetails(error, recovering)
+                )
             }
         })
         val reply: MutableMap<String, Any> = HashMap()
@@ -885,6 +891,48 @@ internal class BetterPlayer(
         }
     }
 
+    // Error data for telemetry. Built from ExoPlayer error codes and HTTP data,
+    // never from class names, so it stays readable in minified release builds.
+    private fun buildPlaybackErrorDetails(
+        error: PlaybackException,
+        recovering: Boolean
+    ): HashMap<String, Any?> {
+        var httpStatus: Int? = null
+        var host: String? = null
+        var causeMessage: String? = null
+        var cause: Throwable? = error.cause
+        while (cause != null) {
+            if (httpStatus == null && cause is HttpDataSource.InvalidResponseCodeException) {
+                httpStatus = cause.responseCode
+            }
+            if (host == null && cause is HttpDataSource.HttpDataSourceException) {
+                host = cause.dataSpec.uri.host
+            }
+            if (causeMessage == null && !cause.message.isNullOrBlank()) {
+                causeMessage = cause.message
+            }
+            cause = cause.cause
+        }
+        val message = listOfNotNull(error.message, causeMessage)
+            .distinct()
+            .joinToString(": ")
+        val details = HashMap<String, Any?>()
+        details["kind"] = "playback"
+        details["code"] = error.errorCodeName
+        details["errorCode"] = error.errorCode
+        // Fatal unless the connectivity recovery loop resumes playback by
+        // itself. A 4xx or a missing file never recovers by retrying.
+        details["fatal"] = !recovering ||
+            (httpStatus != null && httpStatus in 400..499) ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        // Distinguishes a new error report from the same error state.
+        details["sequence"] = ++playbackErrorSequence
+        details["httpStatus"] = httpStatus
+        details["host"] = host
+        details["message"] = if (message.length > 500) message.substring(0, 500) else message
+        return details
+    }
+
     private fun shouldRecoverFromBehindLiveWindow(error: PlaybackException): Boolean {
         if (currentContentType != C.TYPE_HLS) {
             return false
@@ -984,7 +1032,10 @@ internal class BetterPlayer(
                 eventSink.error(
                     "VideoError",
                     "Video player stalled while buffering. Possible network connection loss.",
-                    ""
+                    hashMapOf<String, Any?>(
+                        "kind" to "stall",
+                        "sequence" to ++playbackErrorSequence
+                    )
                 )
             }
         }

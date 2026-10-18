@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:better_player/src/configuration/better_player_playback_origin.dart';
 import 'package:better_player/src/controls/better_player_progress_colors.dart';
 import 'package:better_player/src/core/better_player_controller.dart';
 import 'package:better_player/src/video_player/video_player.dart';
@@ -98,7 +99,7 @@ class _VideoProgressBarState
           return;
         }
         if (_controllerWasPlaying) {
-          betterPlayerController?.play();
+          betterPlayerController?.play(origin: BetterPlayerPlaybackOrigin.system);
           shouldPlayAfterDragEnd = true;
         }
         _setupUpdateBlockTimer();
@@ -177,7 +178,7 @@ class _VideoProgressBarState
   void onFinishedLastSeek() {
     if (shouldPlayAfterDragEnd) {
       shouldPlayAfterDragEnd = false;
-      betterPlayerController?.play();
+      betterPlayerController?.play(origin: BetterPlayerPlaybackOrigin.system);
     }
   }
 }

@@ -149,158 +149,149 @@ video.m3u8
   });
 
   group('Telemetry playback events for audio and subtitle changes', () {
-    test('AUDIO_LANGUAGE_CHANGED event is recorded with correct details and und fallback', () {
-      final controller = BetterPlayerMockController(const BetterPlayerConfiguration());
-      final manager = controller.telemetryManager;
-      manager.startSession(
-        configuration: const BetterPlayerTelemetryConfiguration(
-          baseUrl: 'https://telemetry.example.com',
-        ),
-      );
-
-      manager.handleAudioLanguageChanged(
-        from: null,
-        to: 'fas',
-        positionS: 10.0,
-      );
-
-      final events = manager.pendingPlaybackEvents
-          .where((e) => e.type == 'AUDIO_LANGUAGE_CHANGED')
-          .toList();
-      expect(events.length, 1);
-      expect(events.first.positionS, 10.0);
-      expect(events.first.details['from'], 'und');
-      expect(events.first.details['to'], 'fas');
-
-      // Next change uses previous language if from is omitted, and falls back to und if to is null/empty
-      manager.handleAudioLanguageChanged(
-        to: '',
-        positionS: 25.5,
-      );
-
-      final events2 = manager.pendingPlaybackEvents
-          .where((e) => e.type == 'AUDIO_LANGUAGE_CHANGED')
-          .toList();
-      expect(events2.length, 2);
-      expect(events2.last.positionS, 25.5);
-      expect(events2.last.details['from'], 'fas');
-      expect(events2.last.details['to'], 'und');
-    });
-
-    test('SUBTITLE_CHANGED event sends none for none type and und for null language', () {
-      final controller = BetterPlayerMockController(const BetterPlayerConfiguration());
-      final manager = controller.telemetryManager;
-      manager.startSession(
-        configuration: const BetterPlayerTelemetryConfiguration(
-          baseUrl: 'https://telemetry.example.com',
-        ),
-      );
-
-      // From none (off) to Persian
-      manager.handleSubtitleChanged(
-        from: 'none',
-        to: 'fas',
-        isFromNone: true,
-        positionS: 5.0,
-      );
-
-      // From Persian to English
-      manager.handleSubtitleChanged(
-        from: 'fas',
-        to: 'eng',
-        positionS: 15.0,
-      );
-
-      // From English to subtitle with missing language (null) -> sends 'und'
-      manager.handleSubtitleChanged(
-        from: 'eng',
-        to: null,
-        positionS: 30.0,
-      );
-
-      // From missing language (null) to none (off) -> sends 'none'
-      manager.handleSubtitleChanged(
-        from: null,
-        to: 'none',
-        isToNone: true,
-        positionS: 45.0,
-      );
-
-      final events = manager.pendingPlaybackEvents
-          .where((e) => e.type == 'SUBTITLE_CHANGED')
-          .toList();
-      expect(events.length, 4);
-
-      expect(events[0].details['from'], 'none');
-      expect(events[0].details['to'], 'fas');
-      expect(events[0].positionS, 5.0);
-
-      expect(events[1].details['from'], 'fas');
-      expect(events[1].details['to'], 'eng');
-      expect(events[1].positionS, 15.0);
-
-      expect(events[2].details['from'], 'eng');
-      expect(events[2].details['to'], 'und');
-      expect(events[2].positionS, 30.0);
-
-      expect(events[3].details['from'], 'und');
-      expect(events[3].details['to'], 'none');
-      expect(events[3].positionS, 45.0);
-    });
-
-    test('Controller setAudioTrack and setupSubtitleSource emit telemetry events', () async {
-      final controller = BetterPlayerMockController(const BetterPlayerConfiguration());
+    // Starts a session and plays past the first frame.
+    Future<BetterPlayerMockController> startedController() async {
+      final controller =
+          BetterPlayerMockController(const BetterPlayerConfiguration());
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       controller.videoPlayerController = mockVideo;
-
       controller.telemetryManager.startSession(
         configuration: const BetterPlayerTelemetryConfiguration(
           baseUrl: 'https://telemetry.example.com',
         ),
       );
+      await mockVideo.play();
+      controller.telemetryManager
+          .handlePlayerEvent(BetterPlayerEvent(BetterPlayerEventType.progress));
+      await mockVideo.seekTo(const Duration(seconds: 1));
+      controller.telemetryManager
+          .handlePlayerEvent(BetterPlayerEvent(BetterPlayerEventType.progress));
+      return controller;
+    }
 
-      final trackFas = BetterPlayerAsmsAudioTrack(id: 1, label: 'Persian', language: 'fas');
-      final trackHin = BetterPlayerAsmsAudioTrack(id: 2, label: 'Hindi', language: 'hin');
+    List<String> changes(BetterPlayerController controller, String type) =>
+        controller.telemetryManager.pendingPlaybackEvents
+            .where((e) => e.type == type)
+            .map((e) => '${e.details['from']}>${e.details['to']}')
+            .toList();
+
+    test('AUDIO_LANGUAGE_CHANGED starts from none and drops no-op changes',
+        () async {
+      final controller = await startedController();
+      final manager = controller.telemetryManager;
+
+      manager.handleAudioLanguageChanged(from: null, to: 'fa', positionS: 10);
+      manager.handleAudioLanguageChanged(from: 'fa', to: 'fas', positionS: 11);
+      manager.handleAudioLanguageChanged(to: '', positionS: 25.5);
+
+      expect(changes(controller, 'AUDIO_LANGUAGE_CHANGED'),
+          equals(<String>['none>und', 'und>fas', 'fas>und']));
+      final last = manager.pendingPlaybackEvents
+          .lastWhere((e) => e.type == 'AUDIO_LANGUAGE_CHANGED');
+      expect(last.positionS, 25.5);
+    });
+
+    test('SUBTITLE_CHANGED sends none for none type and und for null language',
+        () async {
+      final controller = await startedController();
+      final manager = controller.telemetryManager;
+
+      manager.handleSubtitleChanged(
+          from: 'none', to: 'fa', isFromNone: true, positionS: 5.0);
+      manager.handleSubtitleChanged(from: 'fas', to: 'en', positionS: 15.0);
+      manager.handleSubtitleChanged(from: 'eng', to: null, positionS: 30.0);
+      manager.handleSubtitleChanged(
+          from: null, to: 'none', isToNone: true, positionS: 45.0);
+
+      expect(
+          changes(controller, 'SUBTITLE_CHANGED'),
+          equals(<String>[
+            'none>none',
+            'none>fas',
+            'fas>eng',
+            'eng>und',
+            'und>none',
+          ]));
+    });
+
+    test('Selections before the first frame are only reported from none',
+        () async {
+      final controller =
+          BetterPlayerMockController(const BetterPlayerConfiguration());
+      final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+      controller.videoPlayerController = mockVideo;
+      final manager = controller.telemetryManager;
+      manager.startSession(
+        configuration: const BetterPlayerTelemetryConfiguration(
+          baseUrl: 'https://telemetry.example.com',
+        ),
+      );
+
+      manager.handleAudioLanguageChanged(to: 'und');
+      manager.handleAudioLanguageChanged(to: 'fa');
+      manager.handleSubtitleChanged(to: 'per');
+      expect(manager.pendingPlaybackEvents, isEmpty);
+
+      await mockVideo.play();
+      manager
+          .handlePlayerEvent(BetterPlayerEvent(BetterPlayerEventType.progress));
+      await mockVideo.seekTo(const Duration(milliseconds: 400));
+      manager
+          .handlePlayerEvent(BetterPlayerEvent(BetterPlayerEventType.progress));
+
+      expect(changes(controller, 'AUDIO_LANGUAGE_CHANGED'),
+          equals(<String>['none>fas']));
+      expect(changes(controller, 'SUBTITLE_CHANGED'),
+          equals(<String>['none>fas']));
+    });
+
+    test('Controller setAudioTrack and setupSubtitleSource emit telemetry events',
+        () async {
+      final controller = await startedController();
+
+      final trackFas =
+          BetterPlayerAsmsAudioTrack(id: 1, label: 'Persian', language: 'fas');
+      final trackHin =
+          BetterPlayerAsmsAudioTrack(id: 2, label: 'Hindi', language: 'hin');
+      final trackHinAgain =
+          BetterPlayerAsmsAudioTrack(id: 2, label: 'Hindi', language: 'hi');
 
       await controller.setAudioTrack(trackFas);
       await controller.setAudioTrack(trackHin);
+      // Re-selecting the same language (even as another object) is a no-op.
+      await controller.setAudioTrack(trackHinAgain);
 
-      // Selecting the same track again does not emit a duplicate event
-      await controller.setAudioTrack(trackHin);
-
-      final subNone = BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none);
+      final subNone = BetterPlayerSubtitlesSource(
+          type: BetterPlayerSubtitlesSourceType.none);
       final subSpa = BetterPlayerSubtitlesSource(
         type: BetterPlayerSubtitlesSourceType.network,
         language: 'spa',
         urls: ['https://example.com/spa.vtt'],
       );
 
-      // Setup initial subtitle does not emit event when sourceInitialize is true
       await controller.setupSubtitleSource(subNone, sourceInitialize: true);
-
-      // Switch to Spanish
       await controller.setupSubtitleSource(subSpa);
-
-      // Switch back to none (off)
       await controller.setupSubtitleSource(subNone);
 
-      final audioEvents = controller.telemetryManager.pendingPlaybackEvents
-          .where((e) => e.type == 'AUDIO_LANGUAGE_CHANGED')
-          .toList();
-      expect(audioEvents.length, 2);
-      expect(audioEvents[0].details['from'], 'und');
-      expect(audioEvents[0].details['to'], 'fas');
-      expect(audioEvents[1].details['from'], 'fas');
-      expect(audioEvents[1].details['to'], 'hin');
+      expect(changes(controller, 'AUDIO_LANGUAGE_CHANGED'),
+          equals(<String>['none>und', 'und>fas', 'fas>hin']));
+      expect(changes(controller, 'SUBTITLE_CHANGED'),
+          equals(<String>['none>none', 'none>spa', 'spa>none']));
+    });
+  });
 
-      final subEvents = controller.telemetryManager.pendingPlaybackEvents
-          .where((e) => e.type == 'SUBTITLE_CHANGED')
-          .toList();
-      expect(subEvents.length, 2);
-      expect(subEvents[0].details['from'], 'none');
-      expect(subEvents[0].details['to'], 'spa');
-      expect(subEvents[1].details['from'], 'spa');
-      expect(subEvents[1].details['to'], 'none');
+  group('ISO 639-2/T conversion', () {
+    test('2-letter, B-form and regional tags become 3-letter T codes', () {
+      const expected = <String, String>{
+        'fa': 'fas', 'ps': 'pus', 'en': 'eng', 'hi': 'hin', 'ur': 'urd',
+        'tr': 'tur', 'ar': 'ara', 'pa': 'pan', 'ta': 'tam', 'ko': 'kor',
+        'de': 'deu', 'per': 'fas', 'ger': 'deu', 'fa-IR': 'fas',
+        'EN_us': 'eng', 'fas': 'fas', 'prs': 'prs', 'und': 'und',
+      };
+      expected.forEach((input, output) {
+        expect(BetterPlayerTelemetryUtils.toIso6392T(input), output,
+            reason: input);
+      });
     });
   });
 }

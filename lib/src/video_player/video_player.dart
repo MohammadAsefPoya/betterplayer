@@ -189,6 +189,12 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   int? _textureId;
 
   Timer? _timer;
+
+  Object? _errorDetails;
+
+  ///Details the native player attached to the last error (on Android a map
+  ///with `code`, `errorCode`, `fatal`, `httpStatus`, `host`, `message`).
+  Object? get errorDetails => _errorDetails;
   bool _isDisposed = false;
   late Completer<void> _initializingCompleter;
   Future<void>? _initialPlayPauseFuture;
@@ -272,8 +278,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     void errorListener(Object object) {
       if (object is PlatformException) {
         final PlatformException e = object;
+        _errorDetails = e.details;
         value = value.copyWith(errorDescription: e.message);
       } else {
+        _errorDetails = null;
         value = value.copyWith(errorDescription: object.toString());
       }
       _timer?.cancel();

@@ -92,6 +92,17 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method == GET_DEVICE_INFO_METHOD) {
+            result.success(
+                hashMapOf<String, Any?>(
+                    "release" to Build.VERSION.RELEASE,
+                    "sdkInt" to Build.VERSION.SDK_INT,
+                    "manufacturer" to Build.MANUFACTURER,
+                    "model" to Build.MODEL
+                )
+            )
+            return
+        }
         if (flutterState == null || flutterState?.textureRegistry == null) {
             result.error("no_activity", "better_player plugin requires a foreground activity", null)
             return
@@ -525,6 +536,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         const val BUFFER_FOR_PLAYBACK_MS = "bufferForPlaybackMs"
         const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = "bufferForPlaybackAfterRebufferMs"
         const val CACHE_KEY_PARAMETER = "cacheKey"
+        private const val GET_DEVICE_INFO_METHOD = "getDeviceInfo"
         private const val INIT_METHOD = "init"
         private const val CREATE_METHOD = "create"
         private const val SET_DATA_SOURCE_METHOD = "setDataSource"

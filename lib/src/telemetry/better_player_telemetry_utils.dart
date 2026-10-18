@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 /// Utility methods for Playback Telemetry
 class BetterPlayerTelemetryUtils {
@@ -186,7 +187,7 @@ class BetterPlayerTelemetryUtils {
     if (trimmed.isEmpty || trimmed == 'null' || trimmed == 'none') {
       return 'und';
     }
-    return trimmed;
+    return toIso6392T(trimmed);
   }
 
   /// Normalizes a subtitle language code.
@@ -200,15 +201,143 @@ class BetterPlayerTelemetryUtils {
     final trimmed = language.trim().toLowerCase();
     if (trimmed == 'none') return 'none';
     if (trimmed.isEmpty || trimmed == 'null') return 'und';
-    return trimmed;
+    return toIso6392T(trimmed);
+  }
+
+  /// ISO 639-1 (2-letter) codes mapped to ISO 639-2/T.
+  static const Map<String, String> _iso6391To6392T = {
+    'aa': 'aar', 'af': 'afr', 'am': 'amh', 'ar': 'ara', 'as': 'asm',
+    'az': 'aze', 'ba': 'bak', 'be': 'bel', 'bg': 'bul', 'bn': 'ben',
+    'bo': 'bod', 'bs': 'bos', 'ca': 'cat', 'cs': 'ces', 'cy': 'cym',
+    'da': 'dan', 'de': 'deu', 'dv': 'div', 'el': 'ell', 'en': 'eng',
+    'eo': 'epo', 'es': 'spa', 'et': 'est', 'eu': 'eus', 'fa': 'fas',
+    'fi': 'fin', 'fr': 'fra', 'ga': 'gle', 'gl': 'glg', 'gu': 'guj',
+    'ha': 'hau', 'he': 'heb', 'hi': 'hin', 'hr': 'hrv', 'hu': 'hun',
+    'hy': 'hye', 'id': 'ind', 'is': 'isl', 'it': 'ita', 'ja': 'jpn',
+    'jv': 'jav', 'ka': 'kat', 'kk': 'kaz', 'km': 'khm', 'kn': 'kan',
+    'ko': 'kor', 'ku': 'kur', 'ky': 'kir', 'la': 'lat', 'lo': 'lao',
+    'lt': 'lit', 'lv': 'lav', 'mk': 'mkd', 'ml': 'mal', 'mn': 'mon',
+    'mr': 'mar', 'ms': 'msa', 'my': 'mya', 'ne': 'nep', 'nl': 'nld',
+    'no': 'nor', 'nb': 'nob', 'nn': 'nno', 'or': 'ori', 'pa': 'pan',
+    'pl': 'pol', 'ps': 'pus', 'pt': 'por', 'ro': 'ron', 'ru': 'rus',
+    'sd': 'snd', 'si': 'sin', 'sk': 'slk', 'sl': 'slv', 'so': 'som',
+    'sq': 'sqi', 'sr': 'srp', 'sv': 'swe', 'sw': 'swa', 'ta': 'tam',
+    'te': 'tel', 'tg': 'tgk', 'th': 'tha', 'tk': 'tuk', 'tl': 'tgl',
+    'tr': 'tur', 'tt': 'tat', 'ug': 'uig', 'uk': 'ukr', 'ur': 'urd',
+    'uz': 'uzb', 'vi': 'vie', 'yi': 'yid', 'zh': 'zho', 'zu': 'zul',
+  };
+
+  /// ISO 639-2/B (bibliographic) codes mapped to their /T form.
+  static const Map<String, String> _iso6392BTo6392T = {
+    'alb': 'sqi', 'arm': 'hye', 'baq': 'eus', 'bur': 'mya', 'chi': 'zho',
+    'cze': 'ces', 'dut': 'nld', 'fre': 'fra', 'geo': 'kat', 'ger': 'deu',
+    'gre': 'ell', 'ice': 'isl', 'mac': 'mkd', 'mao': 'mri', 'may': 'msa',
+    'per': 'fas', 'rum': 'ron', 'slo': 'slk', 'tib': 'bod', 'wel': 'cym',
+  };
+
+  /// Converts a language tag (ISO 639-1, 639-2/B, 639-2/T or a BCP 47 tag
+  /// such as `fa-IR`) to a lowercase ISO 639-2/T code. Unknown values are
+  /// returned lowercased; `und` and `none` are kept as they are.
+  static String toIso6392T(String language) {
+    var code = language.trim().toLowerCase();
+    if (code.isEmpty) return 'und';
+    if (code == 'und' || code == 'none') return code;
+    final separator = code.indexOf(RegExp('[-_]'));
+    if (separator > 0) {
+      code = code.substring(0, separator);
+    }
+    if (code.length == 2) {
+      return _iso6391To6392T[code] ?? code;
+    }
+    return _iso6392BTo6392T[code] ?? code;
+  }
+
+  /// Truncates [value] to at most [maxLength] characters.
+  static String clamp(String value, int maxLength) =>
+      value.length > maxLength ? value.substring(0, maxLength) : value;
+
+  static final RegExp _androidOsPattern = RegExp(
+    r'^android\s+([^\s(]+)\s*\(\s*api(?:\s*level)?\s*(\d+)\s*\)',
+    caseSensitive: false,
+  );
+
+  /// Builds the contract OS string `Android <release> (API <sdk>)`.
+  static String formatAndroidOs(String release, int sdkInt) =>
+      'Android ${release.trim()} (API $sdkInt)';
+
+  /// Rewrites Android OS strings such as `ANDROID 11 (API Level 30)` or
+  /// `ANDROID 14 (API level 34)` to `Android 11 (API 30)`. Other values are
+  /// returned trimmed.
+  static String normalizeOs(String? os) {
+    final trimmed = os?.trim() ?? '';
+    final match = _androidOsPattern.firstMatch(trimmed);
+    if (match == null) return trimmed;
+    return formatAndroidOs(match.group(1)!, int.parse(match.group(2)!));
+  }
+
+  /// Host of [url], or null when it has none (local files, invalid URLs).
+  static String? hostOf(String? url) {
+    if (url == null || url.trim().isEmpty) return null;
+    try {
+      final host = Uri.parse(url.trim()).host;
+      return host.isEmpty ? null : host.toLowerCase();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const MethodChannel _deviceInfoChannel =
+      MethodChannel('better_player_channel');
+  static Future<Map<String, dynamic>?>? _deviceInfoFuture;
+
+  /// Native device information (Android only): `release`, `sdkInt`,
+  /// `manufacturer` and `model`. Resolved once per process; null when it is
+  /// unavailable.
+  static Future<Map<String, dynamic>?> deviceInfo() {
+    return _deviceInfoFuture ??= _loadDeviceInfo();
+  }
+
+  static Future<Map<String, dynamic>?> _loadDeviceInfo() async {
+    try {
+      if (kIsWeb || !Platform.isAndroid) return null;
+      final info = await _deviceInfoChannel
+          .invokeMapMethod<String, dynamic>('getDeviceInfo')
+          .timeout(const Duration(seconds: 2));
+      return info;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Contract OS string from native [info], or null.
+  static String? osFromDeviceInfo(Map<String, dynamic>? info) {
+    final release = info?['release'];
+    final sdkInt = info?['sdkInt'];
+    if (release is! String || release.trim().isEmpty || sdkInt is! int) {
+      return null;
+    }
+    return formatAndroidOs(release, sdkInt);
+  }
+
+  /// `<manufacturer> <model>` from native [info], or null.
+  static String? deviceModelFromDeviceInfo(Map<String, dynamic>? info) {
+    final manufacturer = (info?['manufacturer'] as String?)?.trim() ?? '';
+    final model = (info?['model'] as String?)?.trim() ?? '';
+    final value = [manufacturer, model].where((e) => e.isNotEmpty).join(' ');
+    return value.isEmpty ? null : clamp(value, 100);
   }
 
   /// Cleans a streaming file URL by retaining scheme, host, port (if present), and path,
   /// stripping query parameters, tokens, and fragment.
   /// Returns null if [url] is null or empty.
   static String? cleanFileUrl(String? url) {
+    final cleaned = _cleanFileUrl(url);
+    return cleaned == null ? null : clamp(cleaned, 2048);
+  }
+
+  static String? _cleanFileUrl(String? url) {
     if (url == null) return null;
-    final trimmed = url.trim();
+    final trimmed = url.trim().replaceAll(r'\', '/');
     if (trimmed.isEmpty) return null;
 
     try {

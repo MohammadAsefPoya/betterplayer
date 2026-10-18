@@ -19,6 +19,7 @@ export 'src/configuration/better_player_event.dart';
 export 'src/configuration/better_player_event_type.dart';
 export 'src/configuration/better_player_network_log.dart';
 export 'src/configuration/better_player_notification_configuration.dart';
+export 'src/configuration/better_player_playback_origin.dart';
 export 'src/configuration/better_player_theme.dart';
 export 'src/configuration/better_player_translations.dart';
 export 'src/configuration/better_player_video_format.dart';
