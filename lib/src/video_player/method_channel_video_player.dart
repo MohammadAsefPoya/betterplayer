@@ -288,6 +288,16 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
   }
 
   @override
+  Future<Map<String, dynamic>?> getLivePlaybackInfo(int? textureId) async {
+    try {
+      return await _channel.invokeMapMethod<String, dynamic>(
+          'getLivePlaybackInfo', <String, dynamic>{'textureId': textureId});
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  @override
   Future<void> setAudioTrack(int? textureId, String? name, int? index,
       {String? nativeTrackId, String? formatId, String? language}) {
     return _channel.invokeMethod<void>(
@@ -457,6 +467,22 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             eventType: VideoEventType.networkLog,
             key: key,
             networkLogData: Map<String, dynamic>.from(map),
+          );
+
+        case 'firstFrame':
+          return VideoEvent(
+            eventType: VideoEventType.firstFrame,
+            key: key,
+          );
+
+        case 'recoveredError':
+          final details = map['details'];
+          return VideoEvent(
+            eventType: VideoEventType.recoveredError,
+            key: key,
+            errorDetails: details is Map
+                ? Map<String, dynamic>.from(details)
+                : const <String, dynamic>{},
           );
 
         default:

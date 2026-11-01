@@ -104,6 +104,14 @@ class BetterPlayerTelemetryData {
   /// Playable episode ID (integer >= 1).
   final dynamic episodeId;
 
+  /// Live TV channel ID (integer >= 1). A session with a channel ID and no
+  /// episode ID is a live channel session.
+  final dynamic channelId;
+
+  /// Live event ID (integer >= 1), only when the channel was opened from a
+  /// live event's screen. Sent only together with [channelId].
+  final dynamic eventId;
+
   /// Platform name (e.g. 'ANDROID', 'IOS', 'WEB').
   final String? platform;
 
@@ -129,6 +137,8 @@ class BetterPlayerTelemetryData {
 
   const BetterPlayerTelemetryData({
     this.episodeId,
+    this.channelId,
+    this.eventId,
     this.platform,
     this.deviceType,
     this.os,
@@ -145,6 +155,8 @@ class BetterPlayerTelemetryData {
   }) {
     return BetterPlayerTelemetryData(
       episodeId: episodeId,
+      channelId: channelId,
+      eventId: eventId,
       platform: platform,
       deviceType: deviceType,
       os: os ?? this.os,
@@ -155,9 +167,17 @@ class BetterPlayerTelemetryData {
     );
   }
 
+  /// Whether this is a live channel session: a valid channel ID and no
+  /// valid episode ID.
+  bool get isLiveChannel =>
+      BetterPlayerTelemetryUtils.normalizeEpisodeId(episodeId) == null &&
+      BetterPlayerTelemetryUtils.normalizeEpisodeId(channelId) != null;
+
   /// Whether any metadata property is populated with a value.
   bool get hasValue =>
       episodeId != null ||
+      channelId != null ||
+      eventId != null ||
       (platform != null && platform!.trim().isNotEmpty) ||
       (deviceType != null && deviceType!.trim().isNotEmpty) ||
       (os != null && os!.trim().isNotEmpty) ||
@@ -172,6 +192,14 @@ class BetterPlayerTelemetryData {
   }) {
     final effectiveEpisodeId =
         BetterPlayerTelemetryUtils.normalizeEpisodeId(episodeId);
+    // The gateway rejects episodeId together with channelId, and eventId
+    // without channelId: a live channel sends channelId (+ eventId) only.
+    final effectiveChannelId = effectiveEpisodeId == null
+        ? BetterPlayerTelemetryUtils.normalizeEpisodeId(channelId)
+        : null;
+    final effectiveEventId = effectiveChannelId != null
+        ? BetterPlayerTelemetryUtils.normalizeEpisodeId(eventId)
+        : null;
     final effectivePlatform =
         BetterPlayerTelemetryUtils.normalizePlatform(platform);
     final effectiveDeviceType =
@@ -186,6 +214,8 @@ class BetterPlayerTelemetryData {
     final map = <String, dynamic>{
       'sessionId': sessionId,
       if (effectiveEpisodeId != null) 'episodeId': effectiveEpisodeId,
+      if (effectiveChannelId != null) 'channelId': effectiveChannelId,
+      if (effectiveEventId != null) 'eventId': effectiveEventId,
       'platform': effectivePlatform,
       'deviceType': effectiveDeviceType,
       if (effectiveOs.isNotEmpty) 'os': effectiveOs,
@@ -203,6 +233,9 @@ class BetterPlayerTelemetryData {
         // Do not send userId, profileId, accountId or ip in the JSON body:
         // the gateway adds them.
         if (keyLower == 'userid' ||
+            keyLower == 'episodeid' ||
+            keyLower == 'channelid' ||
+            keyLower == 'eventid' ||
             keyLower == 'profileid' ||
             keyLower == 'user_id' ||
             keyLower == 'profile_id' ||
@@ -283,10 +316,15 @@ class BetterPlayerBufferSampleMetric {
   /// Playable seconds already downloaded ahead in continuous range.
   final double bufferedAheadS;
 
+  /// Live channels only: seconds behind the live edge, rounded to 0.1 s.
+  /// Left out when unknown.
+  final double? liveLatencyS;
+
   const BetterPlayerBufferSampleMetric({
     required this.ts,
     required this.positionS,
     required this.bufferedAheadS,
+    this.liveLatencyS,
   });
 
   Map<String, dynamic> toMap() {
@@ -294,6 +332,7 @@ class BetterPlayerBufferSampleMetric {
       'ts': ts,
       'positionS': positionS,
       'bufferedAheadS': bufferedAheadS,
+      if (liveLatencyS != null) 'liveLatencyS': liveLatencyS,
     };
   }
 }

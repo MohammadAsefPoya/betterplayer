@@ -50,6 +50,12 @@ class MockVideoPlayerController extends VideoPlayerController {
   @override
   Future<Duration?> get position async => value.position;
 
+  /// Native live snapshot returned to telemetry (see getLivePlaybackInfo).
+  Map<String, dynamic>? livePlaybackInfo;
+
+  @override
+  Future<Map<String, dynamic>?> getLivePlaybackInfo() async => livePlaybackInfo;
+
   @override
   Future<void> setVolume(double volume) async {
     this.volume = volume;

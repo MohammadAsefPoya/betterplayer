@@ -269,6 +269,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           value = value.copyWith(size: event.size);
           break;
         case VideoEventType.networkLog:
+        case VideoEventType.firstFrame:
+        case VideoEventType.recoveredError:
           break;
         case VideoEventType.unknown:
           break;
@@ -682,6 +684,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
 
   Future<List<Map<String, dynamic>>?> getAudioTracks() =>
       _videoPlayerPlatform.getAudioTracks(_textureId);
+
+  ///Live playback values for telemetry (Android only), see
+  ///[VideoPlayerPlatform.getLivePlaybackInfo]. Null when unavailable.
+  Future<Map<String, dynamic>?> getLivePlaybackInfo() async {
+    if (_isDisposed || _textureId == null) return null;
+    return _videoPlayerPlatform.getLivePlaybackInfo(_textureId);
+  }
 
   Future<void> setAudioTrack(String? name, int? index,
       {String? nativeTrackId, String? formatId, String? language}) {

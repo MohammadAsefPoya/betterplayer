@@ -26,6 +26,13 @@ import 'better_player_telemetry_utils.dart';
 /// the same episode again (fallback URL, quality change) keeps the session and
 /// reports a `CDN_SWITCH` when the host changes. A different episode, the end
 /// of the media, or disposing the player ends the session with a final batch.
+///
+/// Live channels ("Mobile & STB app: live TV telemetry", Oct 28 2026): a data
+/// source with a `channelId` and no `episodeId` is one session per channel.
+/// Only another channel or disposing the player ends it, never an error or the
+/// end of the stream. Positions are period positions from the native player,
+/// buffer samples carry `liveLatencyS`, and no language events are sent.
+/// Live channel telemetry is off on iOS.
 class BetterPlayerTelemetryManager {
   static const double _seekDiscontinuityThresholdS = 15.0;
   static const Duration _playbackEventDedupWindow = Duration(milliseconds: 500);
@@ -35,6 +42,7 @@ class BetterPlayerTelemetryManager {
   static const Duration _requestTimeout = Duration(seconds: 15);
   static const Duration _undeliveredRetryInterval = Duration(seconds: 30);
   static const int _maxUndeliveredSessions = 50;
+  static const Duration _liveInfoPollInterval = Duration(milliseconds: 500);
 
   // Shared by all players; never closed, so ended sessions can still be
   // delivered after their player is disposed.
@@ -84,9 +92,15 @@ class BetterPlayerTelemetryManager {
   bool _isRestoringPosition = false;
   double? _lastProgressPositionS;
 
-  // Startup measurement
+  // Startup measurement. The first-frame reference is a player position.
   Stopwatch? _startupStopwatch;
   double? _firstFrameReferenceS;
+
+  // Live channels: the latest native position snapshot.
+  Timer? _liveInfoTimer;
+  _LivePlaybackInfo? _liveInfo;
+  Future<void>? _liveInfoFetch;
+  int _liveInfoGeneration = 0;
 
   // Stall / pause pairing
   Stopwatch? _stallStopwatch;
@@ -149,6 +163,16 @@ class BetterPlayerTelemetryManager {
   /// Whether a session has begun and is reporting.
   bool get isSessionActive => _session != null;
 
+  /// Whether the current (or armed) session is a live channel session.
+  bool get isLiveChannelSession =>
+      (_session?.data ?? _prepared?.data)?.isLiveChannel == true;
+
+  bool get _isLiveChannel => isLiveChannelSession;
+
+  // Live channel telemetry covers Android phones, tablets and STB only.
+  static bool get _isLiveTelemetrySupported =>
+      kIsWeb || defaultTargetPlatform != TargetPlatform.iOS;
+
   /// Pending playback events queued for transmission.
   @visibleForTesting
   List<BetterPlayerPlaybackEventMetric> get pendingPlaybackEvents =>
@@ -163,6 +187,10 @@ class BetterPlayerTelemetryManager {
       BetterPlayerUtils.log('Telemetry $name failed: $e\n$st');
     }
   }
+
+  /// Reads the native live position snapshot now instead of on the next poll.
+  @visibleForTesting
+  Future<void> refreshLivePlaybackInfo() => _refreshLiveInfo();
 
   /// Completes when every final flush of ended sessions has finished.
   @visibleForTesting
@@ -208,16 +236,30 @@ class BetterPlayerTelemetryManager {
     }
 
     final data = telemetryData ?? const BetterPlayerTelemetryData();
+    if (data.isLiveChannel && !_isLiveTelemetrySupported) {
+      BetterPlayerUtils.log('Telemetry: live channel telemetry is off here');
+      endSession();
+      _prepared = null;
+      _lastPrepared = null;
+      return;
+    }
     final prepared = _PreparedSession(
       config: configuration,
       data: data,
       identity: _identityOf(data),
     );
+    // Live startup is measured from the stream request.
+    if (data.isLiveChannel) {
+      prepared.setupStopwatch = Stopwatch()..start();
+    }
     // Resolve native device info early so session start does not wait for it.
     unawaited(BetterPlayerTelemetryUtils.deviceInfo());
 
     final current = _prepared;
     if (!forceNew && current != null && current.identity == prepared.identity) {
+      // A fallback URL of the same channel keeps the original stream request
+      // time (null once the session began).
+      prepared.setupStopwatch = current.setupStopwatch;
       final session = _session;
       if (session != null) {
         _reportSourceChange(
@@ -254,7 +296,7 @@ class BetterPlayerTelemetryManager {
       _beginSession(startStopwatch: true);
     } else if (!_hasPlaybackStarted && _startupStopwatch == null) {
       _startupStopwatch = Stopwatch()..start();
-      _firstFrameReferenceS = _getCurrentPositionSeconds();
+      _firstFrameReferenceS = _getPlayerPositionSeconds();
     }
     _handlePlay(_getCurrentPositionSeconds(), origin);
   }
@@ -375,6 +417,9 @@ class BetterPlayerTelemetryManager {
     final episodeId =
         BetterPlayerTelemetryUtils.normalizeEpisodeId(data.episodeId);
     if (episodeId != null) return 'episode:$episodeId';
+    if (data.isLiveChannel) {
+      return 'channel:${BetterPlayerTelemetryUtils.normalizeEpisodeId(data.channelId)}';
+    }
     return 'url:${BetterPlayerTelemetryUtils.cleanFileUrl(data.fileUrl) ?? ''}';
   }
 
@@ -392,9 +437,10 @@ class BetterPlayerTelemetryManager {
     _session = session;
     _sessionId = session.sessionId;
     _sourceHost = BetterPlayerTelemetryUtils.hostOf(prepared.data.fileUrl);
-    _firstFrameReferenceS = _getCurrentPositionSeconds();
+    _firstFrameReferenceS = _getPlayerPositionSeconds();
     if (startStopwatch) {
-      _startupStopwatch = Stopwatch()..start();
+      _startupStopwatch = prepared.setupStopwatch ?? (Stopwatch()..start());
+      prepared.setupStopwatch = null;
     }
     // Languages selected before play (default tracks, app preferences).
     _currentAudioLanguage = prepared.audioLanguage;
@@ -433,6 +479,9 @@ class BetterPlayerTelemetryManager {
     _lastPlaybackEventAt = null;
     _suppressNextPausePositionS = null;
     _suppressNextPlayPositionS = null;
+    _liveInfo = null;
+    _liveInfoFetch = null;
+    _liveInfoGeneration++;
     _currentAudioLanguage = null;
     _currentSubtitleLanguage = null;
     _reportedAudioLanguage = null;
@@ -453,6 +502,13 @@ class BetterPlayerTelemetryManager {
       config.batchSendInterval,
       (_) => _sendPendingBatches(isFinal: false),
     );
+    if (_isLiveChannel) {
+      unawaited(_refreshLiveInfo());
+      _liveInfoTimer = Timer.periodic(
+        _liveInfoPollInterval,
+        (_) => _refreshLiveInfo(),
+      );
+    }
   }
 
   void _stopTimers() {
@@ -460,6 +516,33 @@ class BetterPlayerTelemetryManager {
     _bufferSampleTimer = null;
     _batchSendTimer?.cancel();
     _batchSendTimer = null;
+    _liveInfoTimer?.cancel();
+    _liveInfoTimer = null;
+  }
+
+  /// Reads the native live position snapshot of the current session.
+  Future<void> _refreshLiveInfo() {
+    final pending = _liveInfoFetch;
+    if (pending != null) return pending;
+    late final Future<void> fetch;
+    fetch = _fetchLiveInfo().whenComplete(() {
+      if (identical(_liveInfoFetch, fetch)) _liveInfoFetch = null;
+    });
+    _liveInfoFetch = fetch;
+    return fetch;
+  }
+
+  Future<void> _fetchLiveInfo() async {
+    if (_isDisposed || _session == null) return;
+    final generation = _liveInfoGeneration;
+    try {
+      final map = await controller.videoPlayerController?.getLivePlaybackInfo();
+      if (generation != _liveInfoGeneration || _session == null) return;
+      final info = _LivePlaybackInfo.fromMap(map);
+      if (info != null) _liveInfo = info;
+    } catch (e) {
+      BetterPlayerUtils.log('Telemetry live playback info failed: $e');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -496,6 +579,14 @@ class BetterPlayerTelemetryManager {
   Future<bool> _dispatchSessionStart(_SessionCore session) async {
     if (session.startCompleted) return true;
     if (session.startRejected) return false;
+    // The previous session's final batch goes first (channel zapping).
+    if (_pendingFlushes.isNotEmpty) {
+      await Future.wait(_pendingFlushes.toList())
+          .timeout(_flushWaitTimeout, onTimeout: () => const <void>[]);
+      if (session.ended || session.startCompleted || session.startRejected) {
+        return session.startCompleted;
+      }
+    }
     final ok = await _postSessionStart(session);
     if (!ok && !session.startRejected && !session.ended && !_isDisposed) {
       _scheduleSessionStartRetry(session);
@@ -663,9 +754,46 @@ class BetterPlayerTelemetryManager {
   /// change so startup time is measured with the player's position updates.
   void handlePositionTick() {
     if (_isDisposed || _session == null || _hasPlaybackStarted) return;
-    _guard('handlePositionTick',
-        () => _checkFirstFrame(_getCurrentPositionSeconds()));
+    _guard('handlePositionTick', _checkFirstFrame);
   }
+
+  /// The native player rendered the first frame of the stream. For a live
+  /// channel this is PLAYBACK_STARTED; other sessions keep detecting the
+  /// first frame from the position, which also handles a resume seek.
+  void handleFirstFrame() => _guard('handleFirstFrame', () {
+        final session = _session;
+        if (_isDisposed ||
+            session == null ||
+            _hasPlaybackStarted ||
+            !_isLiveChannel) {
+          return;
+        }
+        final startupMs = _startupStopwatch?.elapsedMilliseconds;
+        _refreshLiveInfo().whenComplete(() => _guard('handleFirstFrame', () {
+              // Without a snapshot the position fallback reports it later.
+              if (!identical(_session, session) ||
+                  _hasPlaybackStarted ||
+                  _liveInfo == null) {
+                return;
+              }
+              _markPlaybackStarted(
+                _getCurrentPositionSeconds(),
+                startupMs: startupMs,
+              );
+            }));
+      });
+
+  /// The native player recovered from an error by itself (for example it
+  /// jumped back to the live edge). Reported as a non-fatal ERROR.
+  void handleRecoveredError(Map<String, dynamic>? details) =>
+      _guard('handleRecoveredError', () {
+        if (_isDisposed) return;
+        final errorDetails = <String, dynamic>{...?details, 'fatal': false};
+        _handleError(_getCurrentPositionSeconds(), <String, dynamic>{
+          'exception': errorDetails['message'],
+          'errorDetails': errorDetails,
+        });
+      });
 
   BetterPlayerPlaybackOrigin _originOf(BetterPlayerEvent event) {
     final origin = event.parameters?['origin'];
@@ -952,11 +1080,10 @@ class BetterPlayerTelemetryManager {
       return;
     }
 
+    // A pause of any origin closes the watched range; the next play opens a
+    // new one.
+    _finalizeWatchedRange(positionS);
     _pausedPositionS = positionS;
-    if (_activeWatchedRange != null) {
-      _activeWatchedRange = _activeWatchedRange!.copyWith(toS: positionS);
-      _lastWatchedPositionS = positionS;
-    }
     if (_playbackState == _TelemetryPlaybackState.paused) {
       return;
     }
@@ -974,12 +1101,6 @@ class BetterPlayerTelemetryManager {
   }
 
   void _handleSeekWithPositions(double fromPositionS, double toPositionS) {
-    // Before the first frame a seek only moves the start position.
-    if (!_hasPlaybackStarted) {
-      _firstFrameReferenceS = toPositionS;
-      return;
-    }
-
     // The position restore after a retry / quality change / fallback.
     if (_isRestoringPosition) {
       _isRestoringPosition = false;
@@ -1019,9 +1140,27 @@ class BetterPlayerTelemetryManager {
   ) {
     if (toDuration == null) return;
 
-    final toPositionS = toDuration.inMilliseconds / 1000.0;
+    final toPlayerS = toDuration.inMilliseconds / 1000.0;
+    // Before the first frame a seek only moves the start position.
+    if (!_hasPlaybackStarted) {
+      _firstFrameReferenceS = toPlayerS;
+      return;
+    }
+
+    // Seek durations are player (live window) positions; a live channel
+    // reports period positions.
+    var offsetS = 0.0;
+    if (_isLiveChannel) {
+      final info = _liveInfo;
+      if (info == null) {
+        _finalizeWatchedRange(_activeWatchedRange?.toS ?? currentPositionS);
+        return;
+      }
+      offsetS = info.periodPositionS - info.positionS;
+    }
+    final toPositionS = toPlayerS + offsetS;
     final fromPositionS = fromDuration != null
-        ? fromDuration.inMilliseconds / 1000.0
+        ? fromDuration.inMilliseconds / 1000.0 + offsetS
         : _resolveSeekStartPositionFallback(currentPositionS);
     _handleSeekWithPositions(fromPositionS, toPositionS);
   }
@@ -1035,7 +1174,9 @@ class BetterPlayerTelemetryManager {
 
   void _handleResumePosition(double positionS) {
     final pausedPositionS = _pausedPositionS;
-    if (pausedPositionS == null) return;
+    // On a live channel the player moves on its own (live edge, reload); a
+    // resume is never a viewer seek.
+    if (pausedPositionS == null || _isLiveChannel) return;
 
     final resumeDistanceS = (positionS - pausedPositionS).abs();
     if (resumeDistanceS <= _seekDiscontinuityThresholdS) return;
@@ -1192,6 +1333,16 @@ class BetterPlayerTelemetryManager {
 
   void _handleEnded(double positionS) {
     if (_session == null) return;
+    if (_isLiveChannel) {
+      // The stream really ended. The session stays open until the viewer
+      // changes channel or closes the player.
+      _finalizeWatchedRange(_activeWatchedRange?.toS ?? positionS);
+      recordPlaybackEvent(
+        type: 'ENDED',
+        positionS: positionS,
+      );
+      return;
+    }
     // A "completed" far from the end is a player glitch the app recovers
     // from (seek back and play); it is not the end of the viewing.
     final duration = controller.videoPlayerController?.value.duration;
@@ -1300,16 +1451,20 @@ class BetterPlayerTelemetryManager {
   void _handleProgress(double currentPositionS) {
     if (!_isControllerPlaying) return;
     _lastProgressPositionS = currentPositionS;
-    _checkFirstFrame(currentPositionS);
+    _checkFirstFrame();
     _startOrExtendWatchedRange(currentPositionS);
   }
 
-  /// PLAYBACK_STARTED is sent once, when the position first advances after
-  /// the play request (the first rendered frame).
-  void _checkFirstFrame(double positionS) {
+  /// PLAYBACK_STARTED is sent once, when the player position first advances
+  /// after the play request (the first rendered frame). Live channels get it
+  /// from the native first-frame event; this stays as their fallback.
+  void _checkFirstFrame() {
     if (_hasPlaybackStarted || _session == null || !_isControllerPlaying) {
       return;
     }
+    // A live position is only known once the native snapshot arrived.
+    if (_isLiveChannel && _liveInfo == null) return;
+    final positionS = _getPlayerPositionSeconds();
     final reference = _firstFrameReferenceS;
     // While buffering the position only jumps (seek to a start position);
     // frames render once the player is ready.
@@ -1321,6 +1476,10 @@ class BetterPlayerTelemetryManager {
     }
     if (positionS <= reference + 0.001) return;
 
+    _markPlaybackStarted(_getCurrentPositionSeconds());
+  }
+
+  void _markPlaybackStarted(double positionS, {int? startupMs}) {
     _hasPlaybackStarted = true;
     _playbackState = _TelemetryPlaybackState.playing;
     final stopwatch = _startupStopwatch;
@@ -1329,11 +1488,16 @@ class BetterPlayerTelemetryManager {
       type: 'PLAYBACK_STARTED',
       positionS: positionS,
       details: <String, dynamic>{
-        'startupMs': stopwatch?.elapsedMilliseconds ?? _millisSinceStart(),
+        'startupMs':
+            startupMs ?? stopwatch?.elapsedMilliseconds ?? _millisSinceStart(),
       },
     );
     _recordInitialQualitySwitch(positionS);
     _recordInitialLanguages(positionS);
+    // A live range can only start once the period position is known.
+    if (_isLiveChannel && _isControllerPlaying) {
+      _startOrExtendWatchedRange(positionS);
+    }
   }
 
   int _millisSinceStart() {
@@ -1343,6 +1507,8 @@ class BetterPlayerTelemetryManager {
   }
 
   void _recordInitialLanguages(double positionS) {
+    // Live channels never report languages.
+    if (_isLiveChannel) return;
     final audio = _resolveCurrentAudioLanguage();
     _currentAudioLanguage = audio;
     _reportedAudioLanguage = audio;
@@ -1391,6 +1557,8 @@ class BetterPlayerTelemetryManager {
   }
 
   void _startOrExtendWatchedRange(double positionS) {
+    // A live position is unknown until the native snapshot arrived.
+    if (_isLiveChannel && _liveInfo == null) return;
     if (_activeWatchedRange == null) {
       _activeWatchedRange = BetterPlayerWatchedRangeMetric(
         rangeId: BetterPlayerTelemetryUtils.generateUuidV4(),
@@ -1460,7 +1628,7 @@ class BetterPlayerTelemetryManager {
     required String? to,
     double? positionS,
   }) {
-    if (_isDisposed || _session == null) return;
+    if (_isDisposed || _session == null || _isLiveChannel) return;
 
     final effectiveTo = to != null
         ? BetterPlayerTelemetryUtils.normalizeAudioLanguageCode(to)
@@ -1491,7 +1659,7 @@ class BetterPlayerTelemetryManager {
     bool isToNone = false,
     double? positionS,
   }) {
-    if (_isDisposed || _session == null) return;
+    if (_isDisposed || _session == null || _isLiveChannel) return;
 
     final effectiveTo =
         BetterPlayerTelemetryUtils.normalizeSubtitleLanguageCode(
@@ -1594,16 +1762,33 @@ class BetterPlayerTelemetryManager {
       }
     }
 
-    final sample = BetterPlayerBufferSampleMetric(
+    var sample = BetterPlayerBufferSampleMetric(
       ts: BetterPlayerTelemetryUtils.formatIsoTimestamp(DateTime.now()),
       positionS: positionS,
       bufferedAheadS: bufferedAheadS,
     );
+    if (_isLiveChannel) {
+      final info = _liveInfo;
+      if (info == null) return;
+      sample = BetterPlayerBufferSampleMetric(
+        ts: sample.ts,
+        positionS: info.periodPositionS,
+        bufferedAheadS: info.bufferedAheadS ?? bufferedAheadS,
+        liveLatencyS: info.liveLatencyS,
+      );
+    }
 
     _pendingBufferSamples.add(sample);
   }
 
+  /// The position reported to the backend: the player position, or the
+  /// period position on a live channel (it grows while the channel plays).
   double _getCurrentPositionSeconds() {
+    if (_isLiveChannel) return _liveInfo?.periodPositionS ?? 0.0;
+    return _getPlayerPositionSeconds();
+  }
+
+  double _getPlayerPositionSeconds() {
     final pos = controller.videoPlayerController?.value.position;
     return max(0.0, (pos?.inMilliseconds ?? 0) / 1000.0);
   }
@@ -1901,6 +2086,8 @@ class _PreparedSession {
   final String identity;
   String? audioLanguage;
   String? subtitleLanguage;
+  // Live channels: started at the stream request, used once for startupMs.
+  Stopwatch? setupStopwatch;
 
   _PreparedSession({
     required this.config,
@@ -1970,6 +2157,41 @@ class _QualitySnapshot {
     this.width,
     this.height,
   });
+}
+
+/// Native live position snapshot (Android).
+class _LivePlaybackInfo {
+  // Player position in the live window, in seconds.
+  final double positionS;
+  // Position in the period; it keeps growing while the channel plays.
+  final double periodPositionS;
+  final double? liveLatencyS;
+  final double? bufferedAheadS;
+
+  const _LivePlaybackInfo({
+    required this.positionS,
+    required this.periodPositionS,
+    this.liveLatencyS,
+    this.bufferedAheadS,
+  });
+
+  static _LivePlaybackInfo? fromMap(Map<String, dynamic>? map) {
+    final positionMs = map?['positionMs'];
+    final periodPositionMs = map?['periodPositionMs'];
+    if (positionMs is! num || periodPositionMs is! num) return null;
+    final liveOffsetMs = map?['liveOffsetMs'];
+    final bufferedAheadMs = map?['bufferedAheadMs'];
+    return _LivePlaybackInfo(
+      positionS: positionMs / 1000.0,
+      periodPositionS: periodPositionMs / 1000.0,
+      // Rounded to 0.1 s and never negative.
+      liveLatencyS: liveOffsetMs is num
+          ? (max(0.0, liveOffsetMs / 1000.0) * 10).round() / 10
+          : null,
+      bufferedAheadS:
+          bufferedAheadMs is num ? max(0.0, bufferedAheadMs / 1000.0) : null,
+    );
+  }
 }
 
 enum _TelemetryPlaybackState {

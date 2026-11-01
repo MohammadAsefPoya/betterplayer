@@ -1536,7 +1536,8 @@ void main() {
       controller.dispose(forceDispose: true);
     });
 
-    test('Pause and resume within 15 seconds keep one watched range', () async {
+    test('A pause closes the watched range and the resume opens a new one',
+        () async {
       final mockVideo = BetterPlayerTestUtils.setupMockVideoPlayerControler();
       mockVideo.setDuration(const Duration(minutes: 5));
       final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
@@ -1580,6 +1581,7 @@ void main() {
         BetterPlayerEvent(BetterPlayerEventType.play),
       );
       await progressAt(controller, mockVideo, 20);
+      await progressAt(controller, mockVideo, 24);
 
       await controller.telemetryManager.dispose(isFinal: true);
 
@@ -1589,9 +1591,13 @@ void main() {
       expect(seekEvents, isEmpty);
 
       final watchedRanges = allWatchedRanges();
-      expect(watchedRanges.length, equals(1));
-      expect(watchedRanges.single['fromS'], equals(0.0));
-      expect(watchedRanges.single['toS'], equals(20.0));
+      expect(watchedRanges.length, equals(2));
+      expect(watchedRanges[0]['fromS'], equals(0.0));
+      expect(watchedRanges[0]['toS'], equals(10.0));
+      expect(watchedRanges[1]['fromS'], equals(20.0));
+      expect(watchedRanges[1]['toS'], equals(24.0));
+      expect(watchedRanges[0]['rangeId'],
+          isNot(equals(watchedRanges[1]['rangeId'])));
 
       controller.dispose(forceDispose: true);
     });

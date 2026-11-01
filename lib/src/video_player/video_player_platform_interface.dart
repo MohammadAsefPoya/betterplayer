@@ -158,6 +158,12 @@ abstract class VideoPlayerPlatform {
   Future<List<Map<String, dynamic>>?> getAudioTracks(int? textureId) async =>
       null;
 
+  /// Live playback values for telemetry (Android only): `positionMs` (window
+  /// position), `periodPositionMs`, `liveOffsetMs` (null when unknown) and
+  /// `bufferedAheadMs`. Null when the platform does not provide them.
+  Future<Map<String, dynamic>?> getLivePlaybackInfo(int? textureId) async =>
+      null;
+
   Future<void> setAudioTrack(int? textureId, String? name, int? index,
       {String? nativeTrackId, String? formatId, String? language}) {
     throw UnimplementedError('setAudio() has not been implemented.');
@@ -384,6 +390,7 @@ class VideoEvent {
     this.buffered,
     this.position,
     this.networkLogData,
+    this.errorDetails,
   });
 
   /// The type of the event.
@@ -414,6 +421,9 @@ class VideoEvent {
 
   /// Network log event data from native layer
   final Map<String, dynamic>? networkLogData;
+
+  /// Error details of a [VideoEventType.recoveredError] event.
+  final Map<String, dynamic>? errorDetails;
 
   @override
   bool operator ==(Object other) {
@@ -477,6 +487,13 @@ enum VideoEventType {
 
   /// Network request or video chunk log event.
   networkLog,
+
+  /// The first video frame of the stream was rendered.
+  firstFrame,
+
+  /// The player hit an error and recovered by itself (for example it jumped
+  /// back to the live edge). Playback goes on; it is not an error state.
+  recoveredError,
 }
 
 /// Describes a discrete segment of time within a video using a [start] and

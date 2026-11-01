@@ -684,6 +684,14 @@ internal class BetterPlayer(
                 completeAudioSelectionIfActive(trackSelections)
             }
 
+            // Telemetry: the first rendered frame ends the startup time.
+            override fun onRenderedFirstFrame() {
+                val event: MutableMap<String, Any?> = HashMap()
+                event["event"] = "firstFrame"
+                event["key"] = key
+                eventSink.success(event)
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
@@ -724,6 +732,13 @@ internal class BetterPlayer(
 
             override fun onPlayerError(error: PlaybackException) {
                 if (shouldRecoverFromBehindLiveWindow(error) && recoverFromBehindLiveWindow()) {
+                    // A real error, but playback goes on at the live edge: report
+                    // it to telemetry without putting the player in an error state.
+                    val event: MutableMap<String, Any?> = HashMap()
+                    event["event"] = "recoveredError"
+                    event["key"] = key
+                    event["details"] = buildPlaybackErrorDetails(error, true)
+                    eventSink.success(event)
                     return
                 }
                 val recovering = shouldRecoverFromConnectivityLoss(error)
@@ -866,6 +881,29 @@ internal class BetterPlayer(
                 }
             }
             return exoPlayer?.currentPosition ?: 0L
+        }
+
+    // Telemetry values for live channels, read together so they match. On a
+    // live stream currentPosition is relative to the moving live window; the
+    // period position keeps growing while the channel plays.
+    val livePlaybackInfo: Map<String, Any?>?
+        get() {
+            val player = exoPlayer ?: return null
+            val positionMs = player.currentPosition
+            var periodPositionMs = positionMs
+            val timeline = player.currentTimeline
+            if (!timeline.isEmpty) {
+                val period = timeline.getPeriod(player.currentPeriodIndex, Timeline.Period())
+                periodPositionMs = positionMs - period.positionInWindowMs
+            }
+            val liveOffsetMs = player.currentLiveOffset
+            return hashMapOf(
+                "isLive" to player.isCurrentMediaItemLive,
+                "positionMs" to positionMs,
+                "periodPositionMs" to periodPositionMs,
+                "liveOffsetMs" to if (liveOffsetMs == C.TIME_UNSET) null else liveOffsetMs,
+                "bufferedAheadMs" to player.totalBufferedDuration
+            )
         }
 
     private fun sendInitialized() {

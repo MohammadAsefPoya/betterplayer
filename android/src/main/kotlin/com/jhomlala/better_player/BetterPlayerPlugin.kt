@@ -188,6 +188,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 player.sendBufferingUpdate(false)
             }
             ABSOLUTE_POSITION_METHOD -> result.success(player.absolutePosition)
+            GET_LIVE_PLAYBACK_INFO_METHOD -> result.success(player.livePlaybackInfo)
             SET_SPEED_METHOD -> {
                 player.setSpeed(call.argument(SPEED_PARAMETER)!!)
                 result.success(null)
@@ -551,6 +552,7 @@ class BetterPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         private const val SET_TRACK_PARAMETERS_METHOD = "setTrackParameters"
         private const val SET_AUDIO_TRACK_METHOD = "setAudioTrack"
         private const val GET_AUDIO_TRACKS_METHOD = "getAudioTracks"
+        private const val GET_LIVE_PLAYBACK_INFO_METHOD = "getLivePlaybackInfo"
         private const val ENABLE_PICTURE_IN_PICTURE_METHOD = "enablePictureInPicture"
         private const val DISABLE_PICTURE_IN_PICTURE_METHOD = "disablePictureInPicture"
         private const val IS_PICTURE_IN_PICTURE_SUPPORTED_METHOD = "isPictureInPictureSupported"

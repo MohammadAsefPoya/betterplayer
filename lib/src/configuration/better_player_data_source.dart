@@ -83,6 +83,14 @@ class BetterPlayerDataSource {
   ///Playable episode ID for telemetry
   final dynamic episodeId;
 
+  ///Live TV channel ID for telemetry. A data source with a channel ID and no
+  ///episode ID is reported as a live channel session.
+  final dynamic channelId;
+
+  ///Live event ID for telemetry. Set only when the channel was opened from a
+  ///live event's screen; requires [channelId].
+  final dynamic eventId;
+
   ///Platform string for telemetry (e.g. 'ANDROID', 'IOS', 'WEB')
   final String? platform;
 
@@ -123,6 +131,8 @@ class BetterPlayerDataSource {
     this.bufferingConfiguration = const BetterPlayerBufferingConfiguration(),
     this.telemetryConfiguration,
     this.episodeId,
+    this.channelId,
+    this.eventId,
     this.platform,
     this.deviceType,
     this.os,
@@ -157,6 +167,8 @@ class BetterPlayerDataSource {
         const BetterPlayerBufferingConfiguration(),
     BetterPlayerTelemetryConfiguration? telemetryConfiguration,
     dynamic episodeId,
+    dynamic channelId,
+    dynamic eventId,
     String? platform,
     String? deviceType,
     String? os,
@@ -182,6 +194,8 @@ class BetterPlayerDataSource {
       bufferingConfiguration: bufferingConfiguration,
       telemetryConfiguration: telemetryConfiguration,
       episodeId: episodeId,
+      channelId: channelId,
+      eventId: eventId,
       platform: platform,
       deviceType: deviceType,
       os: os,
@@ -204,6 +218,8 @@ class BetterPlayerDataSource {
     Widget? placeholder,
     BetterPlayerTelemetryConfiguration? telemetryConfiguration,
     dynamic episodeId,
+    dynamic channelId,
+    dynamic eventId,
     String? platform,
     String? deviceType,
     String? os,
@@ -224,6 +240,8 @@ class BetterPlayerDataSource {
       placeholder: placeholder,
       telemetryConfiguration: telemetryConfiguration,
       episodeId: episodeId,
+      channelId: channelId,
+      eventId: eventId,
       platform: platform,
       deviceType: deviceType,
       os: os,
@@ -247,6 +265,8 @@ class BetterPlayerDataSource {
     Widget? placeholder,
     BetterPlayerTelemetryConfiguration? telemetryConfiguration,
     dynamic episodeId,
+    dynamic channelId,
+    dynamic eventId,
     String? platform,
     String? deviceType,
     String? os,
@@ -269,6 +289,8 @@ class BetterPlayerDataSource {
       placeholder: placeholder,
       telemetryConfiguration: telemetryConfiguration,
       episodeId: episodeId,
+      channelId: channelId,
+      eventId: eventId,
       platform: platform,
       deviceType: deviceType,
       os: os,
@@ -300,6 +322,8 @@ class BetterPlayerDataSource {
         const BetterPlayerBufferingConfiguration(),
     BetterPlayerTelemetryConfiguration? telemetryConfiguration,
     dynamic episodeId,
+    dynamic channelId,
+    dynamic eventId,
     String? platform,
     String? deviceType,
     String? os,
@@ -330,6 +354,8 @@ class BetterPlayerDataSource {
       telemetryConfiguration:
           telemetryConfiguration ?? this.telemetryConfiguration,
       episodeId: episodeId ?? this.episodeId,
+      channelId: channelId ?? this.channelId,
+      eventId: eventId ?? this.eventId,
       platform: platform ?? this.platform,
       deviceType: deviceType ?? this.deviceType,
       os: os ?? this.os,

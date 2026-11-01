@@ -300,6 +300,8 @@ class BetterPlayerController {
   Future setupDataSource(
     BetterPlayerDataSource betterPlayerDataSource, {
     dynamic episodeId,
+    dynamic channelId,
+    dynamic eventId,
     String? platform,
     String? deviceType,
     String? os,
@@ -320,6 +322,8 @@ class BetterPlayerController {
         configuration: effectiveTelemetryConfig,
         telemetryData: BetterPlayerTelemetryData(
           episodeId: episodeId ?? betterPlayerDataSource.episodeId,
+          channelId: channelId ?? betterPlayerDataSource.channelId,
+          eventId: eventId ?? betterPlayerDataSource.eventId,
           platform: platform ?? betterPlayerDataSource.platform,
           deviceType: deviceType ?? betterPlayerDataSource.deviceType,
           os: os ?? betterPlayerDataSource.os,
@@ -392,6 +396,8 @@ class BetterPlayerController {
   Future setDataSource(
     BetterPlayerDataSource betterPlayerDataSource, {
     dynamic episodeId,
+    dynamic channelId,
+    dynamic eventId,
     String? platform,
     String? deviceType,
     String? os,
@@ -402,6 +408,8 @@ class BetterPlayerController {
       setupDataSource(
         betterPlayerDataSource,
         episodeId: episodeId,
+        channelId: channelId,
+        eventId: eventId,
         platform: platform,
         deviceType: deviceType,
         os: os,
@@ -1573,6 +1581,12 @@ class BetterPlayerController {
             ),
           );
         }
+        break;
+      case VideoEventType.firstFrame:
+        _telemetryManager.handleFirstFrame();
+        break;
+      case VideoEventType.recoveredError:
+        _telemetryManager.handleRecoveredError(event.errorDetails);
         break;
       default:
 

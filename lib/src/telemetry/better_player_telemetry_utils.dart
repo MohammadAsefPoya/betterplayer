@@ -124,7 +124,11 @@ class BetterPlayerTelemetryUtils {
   /// Formats [DateTime] as UTC ISO-8601 with millisecond precision and 'Z'.
   /// Example: 2026-09-10T08:00:00.000Z
   static String formatIsoTimestamp(DateTime dateTime) {
-    return dateTime.toUtc().toIso8601String();
+    final utc = dateTime.toUtc();
+    return DateTime.fromMillisecondsSinceEpoch(
+      utc.millisecondsSinceEpoch,
+      isUtc: true,
+    ).toIso8601String();
   }
 
   /// Sanitizes event details map to ensure:
