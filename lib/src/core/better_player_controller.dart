@@ -1361,6 +1361,9 @@ class BetterPlayerController {
     if (appLifecycleState == AppLifecycleState.paused) {
       // Going to the background is a normal flush, not the end of a session.
       _telemetryManager.flush();
+      _telemetryManager.handleAppBackgrounded();
+    } else if (appLifecycleState == AppLifecycleState.resumed) {
+      _telemetryManager.handleAppResumed();
     }
     if (_isAutomaticPlayPauseHandled()) {
       _appLifecycleState = appLifecycleState;

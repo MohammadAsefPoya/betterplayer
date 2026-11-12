@@ -41,6 +41,7 @@ export 'src/subtitles/better_player_subtitles_source.dart';
 export 'src/subtitles/better_player_subtitles_source_type.dart';
 export 'src/video_player/video_player.dart' show VideoPlayerValue;
 export 'src/core/live_subtitles_addon.dart';
+export 'src/telemetry/better_player_cdn_probe.dart';
 export 'src/telemetry/better_player_telemetry_manager.dart';
 export 'src/telemetry/better_player_telemetry_models.dart';
 export 'src/telemetry/better_player_telemetry_utils.dart';

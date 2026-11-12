@@ -12,6 +12,7 @@ import 'package:better_player/src/subtitles/better_player_subtitles_source_type.
 import 'package:collection/collection.dart' show IterableExtension;
 import 'package:flutter/foundation.dart';
 
+import 'better_player_cdn_probe.dart';
 import 'better_player_telemetry_models.dart';
 import 'better_player_telemetry_utils.dart';
 
@@ -33,6 +34,14 @@ import 'better_player_telemetry_utils.dart';
 /// end of the stream. Positions are period positions from the native player,
 /// buffer samples carry `liveLatencyS`, and no language events are sent.
 /// Live channel telemetry is off on iOS.
+///
+/// CDN ping ("Mobile & STB app: CDN ping you must add", Nov 11 2026): once
+/// per session, [BetterPlayerTelemetryConfiguration.cdnProbeDelay] after
+/// PLAYBACK_STARTED, every URL of
+/// [BetterPlayerTelemetryConfiguration.cdnProbeUrls] is pinged once, one
+/// after another, and the results are sent once to `cdn-probes`. A session
+/// that ends (or an app that goes to the background) before the round is
+/// done sends nothing; back in the foreground the round is scheduled again.
 class BetterPlayerTelemetryManager {
   static const double _seekDiscontinuityThresholdS = 15.0;
   static const Duration _playbackEventDedupWindow = Duration(milliseconds: 500);
@@ -43,6 +52,8 @@ class BetterPlayerTelemetryManager {
   static const Duration _undeliveredRetryInterval = Duration(seconds: 30);
   static const int _maxUndeliveredSessions = 50;
   static const Duration _liveInfoPollInterval = Duration(milliseconds: 500);
+  // The results need a started session (404 otherwise).
+  static const Duration _cdnProbeStartWait = Duration(minutes: 2);
 
   // Shared by all players; never closed, so ended sessions can still be
   // delivered after their player is disposed.
@@ -82,6 +93,8 @@ class BetterPlayerTelemetryManager {
   // Session state
   bool _isDisposed = false;
   bool _hasPlaybackStarted = false;
+  // App in the background: no CDN ping round starts.
+  bool _isAppInBackground = false;
   _TelemetryPlaybackState _playbackState = _TelemetryPlaybackState.unknown;
   int _chunkSeqCounter = 0;
   // Host serving the current video segments, and host of the current source.
@@ -335,6 +348,7 @@ class BetterPlayerTelemetryManager {
 
     session.ended = true;
     session.startRetryTimer?.cancel();
+    _cancelCdnProbe(session);
     _session = null;
     _prepared = null;
     _resetSessionState();
@@ -360,6 +374,24 @@ class BetterPlayerTelemetryManager {
         _sendPendingBatches(isFinal: false);
       });
 
+  /// The app went to the background: a CDN ping round that has not finished
+  /// is abandoned (background throttling would spoil its times).
+  void handleAppBackgrounded() => _guard('handleAppBackgrounded', () {
+        _isAppInBackground = true;
+        final session = _session;
+        if (_isDisposed || session == null) return;
+        _cancelCdnProbe(session);
+      });
+
+  /// The app is back in the foreground: a session without its CDN ping
+  /// round gets it [BetterPlayerTelemetryConfiguration.cdnProbeDelay] later.
+  void handleAppResumed() => _guard('handleAppResumed', () {
+        _isAppInBackground = false;
+        final session = _session;
+        if (_isDisposed || session == null || !_hasPlaybackStarted) return;
+        _scheduleCdnProbe(session);
+      });
+
   /// Legacy API: arms a new session and begins it immediately.
   void startSession({
     BetterPlayerTelemetryConfiguration? configuration,
@@ -380,8 +412,12 @@ class BetterPlayerTelemetryManager {
   /// and no final batch is sent.
   Future<void> stopSession({bool flushPrevious = true}) async {
     if (!flushPrevious) {
-      _session?.ended = true;
-      _session?.startRetryTimer?.cancel();
+      final session = _session;
+      if (session != null) {
+        session.ended = true;
+        session.startRetryTimer?.cancel();
+        _cancelCdnProbe(session);
+      }
       _session = null;
       _prepared = null;
       _stopTimers();
@@ -659,6 +695,138 @@ class BetterPlayerTelemetryManager {
   }
 
   // ---------------------------------------------------------------------------
+  // CDN ping
+  // ---------------------------------------------------------------------------
+
+  /// Starts the session's CDN ping round after the configured delay, unless
+  /// it has no ping URLs, already has its round, or one is pending.
+  void _scheduleCdnProbe(_SessionCore session) {
+    if (_isAppInBackground ||
+        session.ended ||
+        session.cdnProbeDone ||
+        session.cdnProbeRunning ||
+        session.cdnProbeTimer != null ||
+        session.config.cdnProbesUri == null ||
+        BetterPlayerCdnProber.targetsOf(session.config.cdnProbeUrls).isEmpty) {
+      return;
+    }
+    session.cdnProbeTimer = Timer(session.config.cdnProbeDelay, () {
+      session.cdnProbeTimer = null;
+      unawaited(_runCdnProbe(session).catchError((Object e) {
+        BetterPlayerUtils.log('Telemetry CDN ping failed: $e');
+      }));
+    });
+  }
+
+  /// Cancels a pending CDN ping round and abandons one in progress.
+  void _cancelCdnProbe(_SessionCore session) {
+    session.cdnProbeTimer?.cancel();
+    session.cdnProbeTimer = null;
+    if (session.cdnProbeRunning) {
+      session.cdnProbeGeneration++;
+      session.cdnProbeRunning = false;
+    }
+  }
+
+  Future<void> _runCdnProbe(_SessionCore session) async {
+    if (session.ended || session.cdnProbeDone || session.cdnProbeRunning) {
+      return;
+    }
+    final generation = ++session.cdnProbeGeneration;
+    session.cdnProbeRunning = true;
+    final targets =
+        BetterPlayerCdnProber.targetsOf(session.config.cdnProbeUrls);
+    BetterPlayerUtils.log(
+      'Telemetry CDN ping round for session ${session.sessionId}: '
+      '${targets.length} servers',
+    );
+    final results = await BetterPlayerCdnProber.run(
+      targets,
+      timeout: session.config.cdnProbeTimeout,
+      isCancelled: () =>
+          session.ended || generation != session.cdnProbeGeneration,
+    );
+    if (results == null || generation != session.cdnProbeGeneration) {
+      BetterPlayerUtils.log('Telemetry CDN ping round abandoned');
+      return;
+    }
+    session.cdnProbeRunning = false;
+    // One round per session: from here the results are sent even if the
+    // session ends meanwhile.
+    session.cdnProbeDone = true;
+    if (results.isEmpty) return;
+
+    if (!await _waitForSessionStart(session)) {
+      BetterPlayerUtils.log(
+        'Telemetry CDN ping results dropped: the session never started',
+      );
+      return;
+    }
+    final body = jsonEncode(<String, dynamic>{
+      'sessionId': session.sessionId,
+      'results': results.map((r) => r.toJson()).toList(),
+    });
+    final status = await _postCdnProbes(session, body);
+    if (status != null && status < 500) return;
+    // A network error (or a server error) gets one retry, then it is dropped.
+    await Future<void>.delayed(session.config.cdnProbeRetryDelay);
+    await _postCdnProbes(session, body);
+  }
+
+  /// Waits until `sessions/start` of [session] succeeded. False when it was
+  /// rejected, or will not succeed any more.
+  Future<bool> _waitForSessionStart(_SessionCore session) async {
+    final deadline = DateTime.now().add(_cdnProbeStartWait);
+    while (!session.startCompleted) {
+      if (session.startRejected || DateTime.now().isAfter(deadline)) {
+        return false;
+      }
+      final start = session.startFuture;
+      if (start != null) {
+        try {
+          await start.timeout(_inFlightWaitTimeout);
+        } catch (_) {}
+      }
+      if (session.startCompleted) break;
+      // An ended session retries its start no more.
+      if (session.ended && session.startRetryTimer?.isActive != true) {
+        return false;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    return true;
+  }
+
+  /// POSTs the results. Returns the HTTP status, or null on a network error.
+  Future<int?> _postCdnProbes(_SessionCore session, String body) async {
+    final targetUri = session.config.cdnProbesUri;
+    if (targetUri == null) return 400;
+    try {
+      BetterPlayerUtils.log('Telemetry CDN ping POST $targetUri body: $body');
+      final client = session.config.httpClient ?? _httpClient;
+      final request = await client.postUrl(targetUri).timeout(_requestTimeout);
+      request.headers.contentType = ContentType.json;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      final bytes = utf8.encode(body);
+      request.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close().timeout(_requestTimeout);
+      final responseBody = await response
+          .transform(const Utf8Decoder())
+          .join()
+          .timeout(_requestTimeout);
+      BetterPlayerUtils.log(
+        'Telemetry CDN ping response status: ${response.statusCode} '
+        'body: $responseBody',
+      );
+      return response.statusCode;
+    } catch (e) {
+      BetterPlayerUtils.log('Telemetry CDN ping POST failed: $e');
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Player events
   // ---------------------------------------------------------------------------
 
@@ -762,12 +930,14 @@ class BetterPlayerTelemetryManager {
   /// first frame from the position, which also handles a resume seek.
   void handleFirstFrame() => _guard('handleFirstFrame', () {
         final session = _session;
-        if (_isDisposed ||
-            session == null ||
-            _hasPlaybackStarted ||
-            !_isLiveChannel) {
+        if (_isDisposed || !_isLiveChannel) return;
+        if (session == null) {
+          // The stream loaded before play was requested (for example under
+          // a pre-roll ad): its startup ends here, not when play comes.
+          _prepared?.setupStopwatch?.stop();
           return;
         }
+        if (_hasPlaybackStarted) return;
         final startupMs = _startupStopwatch?.elapsedMilliseconds;
         _refreshLiveInfo().whenComplete(() => _guard('handleFirstFrame', () {
               // Without a snapshot the position fallback reports it later.
@@ -1494,6 +1664,8 @@ class BetterPlayerTelemetryManager {
     );
     _recordInitialQualitySwitch(positionS);
     _recordInitialLanguages(positionS);
+    final session = _session;
+    if (session != null) _scheduleCdnProbe(session);
     // A live range can only start once the period position is known.
     if (_isLiveChannel && _isControllerPlaying) {
       _startOrExtendWatchedRange(positionS);
@@ -2112,6 +2284,12 @@ class _SessionCore {
   Duration startRetryDelay = const Duration(seconds: 2);
   Future<void>? inFlightUpload;
   _PendingBatch? retryBatch;
+  // CDN ping round: the pending start, the generation that abandons a round
+  // in progress, and whether the round finished (its results are sent).
+  Timer? cdnProbeTimer;
+  int cdnProbeGeneration = 0;
+  bool cdnProbeRunning = false;
+  bool cdnProbeDone = false;
 
   _SessionCore({
     required this.config,

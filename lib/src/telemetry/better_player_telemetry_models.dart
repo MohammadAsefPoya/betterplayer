@@ -53,6 +53,25 @@ class BetterPlayerTelemetryConfiguration {
   /// this. Defaults to 24 hours.
   final Duration maxBatchAge;
 
+  /// CDN servers to ping once per session (`pingUrls[].url` of the latest
+  /// `GET locations/cdn-urls` answer, in the order given). Empty means no
+  /// ping: the gateway leaves `pingUrls` out to switch pinging off.
+  final List<String> cdnProbeUrls;
+
+  /// Path for the CDN ping results endpoint.
+  final String cdnProbesPath;
+
+  /// Time after PLAYBACK_STARTED before the ping round starts. The contract
+  /// value is 10 seconds; change it only in tests.
+  final Duration cdnProbeDelay;
+
+  /// Timeout of one ping request. The contract value is 5 seconds.
+  final Duration cdnProbeTimeout;
+
+  /// Delay before the single retry of a results upload that failed with a
+  /// network error. The contract value is 15 seconds.
+  final Duration cdnProbeRetryDelay;
+
   const BetterPlayerTelemetryConfiguration({
     this.baseUrl,
     this.startSessionPath = 'v1/statistics/sessions/start',
@@ -69,31 +88,32 @@ class BetterPlayerTelemetryConfiguration {
     this.httpClient,
     this.errorRepeatInterval = const Duration(seconds: 30),
     this.maxBatchAge = const Duration(hours: 24),
+    this.cdnProbeUrls = const <String>[],
+    this.cdnProbesPath = 'v1/statistics/cdn-probes',
+    this.cdnProbeDelay = const Duration(seconds: 10),
+    this.cdnProbeTimeout = const Duration(seconds: 5),
+    this.cdnProbeRetryDelay = const Duration(seconds: 15),
   });
 
   /// Whether this configuration has a valid baseUrl and is enabled.
   bool get hasValue => baseUrl != null && baseUrl!.trim().isNotEmpty && enabled;
 
   /// Full URL for the start session endpoint, or null if baseUrl is not configured.
-  Uri? get startSessionUri {
-    final base = baseUrl?.trim();
-    if (base == null || base.isEmpty) return null;
-    final cleanBase =
-        base.endsWith('/') ? base.substring(0, base.length - 1) : base;
-    final cleanPath = startSessionPath.startsWith('/')
-        ? startSessionPath
-        : '/$startSessionPath';
-    return Uri.parse('$cleanBase$cleanPath');
-  }
+  Uri? get startSessionUri => _uriFor(startSessionPath);
 
   /// Full URL for the batch events endpoint, or null if baseUrl is not configured.
-  Uri? get batchEventsUri {
+  Uri? get batchEventsUri => _uriFor(batchEventsPath);
+
+  /// Full URL for the CDN ping results endpoint, or null if baseUrl is not
+  /// configured.
+  Uri? get cdnProbesUri => _uriFor(cdnProbesPath);
+
+  Uri? _uriFor(String path) {
     final base = baseUrl?.trim();
     if (base == null || base.isEmpty) return null;
     final cleanBase =
         base.endsWith('/') ? base.substring(0, base.length - 1) : base;
-    final cleanPath =
-        batchEventsPath.startsWith('/') ? batchEventsPath : '/$batchEventsPath';
+    final cleanPath = path.startsWith('/') ? path : '/$path';
     return Uri.parse('$cleanBase$cleanPath');
   }
 }

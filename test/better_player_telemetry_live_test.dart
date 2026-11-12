@@ -251,6 +251,32 @@ void main() {
     expect(startupMs, greaterThanOrEqualTo(300));
   });
 
+  test('A stream loaded under a pre-roll ad does not count the ad as startup',
+      () async {
+    final video = BetterPlayerTestUtils.setupMockVideoPlayerControler();
+    final controller = BetterPlayerTestUtils.setupBetterPlayerMockController(
+        controller: video);
+    await controller.setupDataSource(channel(12, telemetry: config()));
+    // The first frame renders while paused; the ad then plays elsewhere.
+    nativeEvent(
+        video, VideoEvent(eventType: VideoEventType.firstFrame, key: null));
+    await settle(600);
+    expect(controller.telemetryManager.isSessionArmed, isTrue);
+
+    await controller.play();
+    await liveAt(controller, video,
+        windowMs: 30000, periodMs: periodOffsetMs, progress: false);
+    controller.postEvent(BetterPlayerEvent(BetterPlayerEventType.progress));
+    await liveAt(controller, video,
+        windowMs: 31000, periodMs: periodOffsetMs + 1000);
+    await settle();
+    await controller.telemetryManager.dispose();
+
+    final started = events().firstWhere((e) => e['type'] == 'PLAYBACK_STARTED');
+    expect(started['details']['startupMs'] as int, lessThan(400));
+    expect(started['positionS'], 27000.0);
+  });
+
   test('Watched ranges use period positions while the live window slides',
       () async {
     final (controller, video) = await playingChannel(config());
